@@ -3,139 +3,131 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Ntale N Derick - Full-Stack Developer & Digital Marketing Enthusiast. View my development projects and marketing work.">
-    <meta name="theme-color" content="#1a1a1a">
-    <meta name="msapplication-navbutton-color" content="#1a1a1a">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Ntale N Derick - Full-Stack Developer & Digital Marketer</title>
+    <meta name="description" content="Derick Ntale is a Full-Stack developer focused on building reliable web application with real business logic. Based in Africa, working globally.">
+    <meta name="author" content="Derick N Ntale">
+    
+    <meta property="og:title" content="Derick N Ntale | Full-Stack Developer">
+    <meta property="og:description" content="Building reliable web application with real business logic. Open to global opportunities.">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="images/og-image.jpg">
+    
+    <title>Derick N Ntale | Full-Stack Developer</title>
+    
+    <link rel="preload" href="Marktopia.css" as="style">
     <link rel="stylesheet" href="Marktopia.css">
+    <link rel="preload" href="images/Profile-pic.jpeg" as="image">
 </head>
 <body>
+    <a href="#main" class="skip-link">Skip to content</a>
+
     <header class="hero">
-        <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" 
-        data-src="https://i.imgur.com/your-marktopia-logo.png"
-        alt="Marktopia - Innovate Elevate" class="logo"
-        onerror="this.src='https://github.com/Der324/Full-Stuck-Dev/blob/main/portifolio/LOGO%20.jpg?raw=true'">
-        <h1>Innovate. Elevate.</h1>
-        <p>Full-Stack Developer • Digital Marketing Enthusiast</p>
+        <div class="hero-content">
+            <h1>Derick N Ntale</h1>
+            <p>Full-Stack Developer • Digital Marketing • AI Enthusiast</p>
 
-        <a href="#contact" class="cta-btn">Let's Build Something Amazing</a>
+            <a href="#contact" class="cta-btn">Work With Me</a>
 
-        <nav aria-label="Main navigation">
-            <input type="checkbox" id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
-
-            <label for="menu-toggle" class="menu-icon" aria-label="Menu">
-                <span class="open-icon" aria-hidden="true">☰</span>
-                <span class="close-icon" aria-hidden="true">✖</span>
-            </label>
-
-            <ul class="menu">
-                <li><a href="#about">About</a></li>
-                <li><a href="#dev-projects">Development</a></li>
-                <li><a href="#marketing-projects">Marketing</a></li>
-                <li><a href="#contact">Contact</a></li>
-            </ul>
-        </nav>
+            <nav aria-label="Primary navigation">
+                <ul class="menu">
+                    <li><a href="#about">About</a></li>
+                    <li><a href="#skills">What I Do</a></li>
+                    <li><a href="#projects">Projects</a></li>
+                    <li><a href="#contact">Contact</a></li>
+                </ul>
+            </nav>
+        </div>
     </header>
 
-    <main>
-        <section id="about" class="about">
+    <main id="main">
+        <section id="about">
             <h2>About Me</h2>
+
             <div class="about-container">
-                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" 
-                data-src="https://i.imgur.com/your-profile-photo.png"
-                alt="Ntale N Derick" class="profile-pic"
-                onerror="this.src='https://github.com/Der324/Full-Stuck-Dev/blob/main/portifolio/Ntale%20N.PNG?raw=true'">
-
+                <img
+                    src="images/Profile-pic.jpeg"
+                    alt="Derick N Ntale portrait"
+                    class="profile-pic"
+                    width="350"
+                    height="453"
+                    loading="lazy"
+                >
                 <div class="about-text">
-                    <p>I am <strong>Ntale N Derick</strong>, a curious learner and problem-solver with a passion for both
-                    <em>technology</em> and <em>human connection</em>. My journey spans customer service, hospitality, finance,
-                    and now full-stack development and digital marketing. This unique blend allows me to understand people, craft
-                    meaningful experiences, and translate ideas into practical solutions.</p>
-                    <p>I thrive in collaborative environments where creativity meets strategy, whether it's coding a responsive web 
-                        app, building a marketing campaign, or engaging with clients across cultures. For me, technology isn't just 
-                        about lines of code—it's about helping people connect, grow, and succeed.
+                    <p>
+                        I'm <strong>Derick N Ntale</strong>, a full-stack developer with a strong interest in building reliable web appilications, exploring AI-driven solutions, and creating digital products that solve real problems.
                     </p>
                     <p>
-                        Let's connect! I'm always open to conversations about innovative projects, digital trends, and opportunities
-                        to collaborate.
+                        While I'm based in Africa, my focus is global. I enjoy working with teams and companies anywhere in the world and adopting technology to real business needs. 
                     </p>
                 </div>
             </div>
         </section>
 
-        <section id="dev-projects">
-            <h2>Development Projects</h2>
+        <section id="skills">
+            <h2>What I Do</h2>
+
             <div class="card-grid">
-                <div class="card">
-                    <h3>Survey Form App</h3>
-                    <p>A responsive HTML5/CSS3 form built as part of the freeCodeCamp curriculum, demonstrating modern form design and validation.</p>
-                    <p>
-                        <a href="https://raw.githack.com/Der324/Full-Stuck-Dev/main/Checkout-page/index.html" target="_blank" rel="noopener noreferrer">🔗 Live Demo</a> |
-                         <a href="https://github.com/Der324/Full-Stuck-Dev/tree/main/Checkout-page" target="_blank" rel="noopener noreferrer">💻 GitHub Repo</a>
-                    </p>
-                </div>
-                <div class="card">
-                    <h3>Checkout Page</h3>
-                    <p>A mock checkout page demonstrating accessibility best practices and semantic HTML structure for e-commerce.</p>
-                    <p>
-                        <a href="https://raw.githack.com/Der324/Full-Stuck-Dev/main/Checkout-page/index.html" target="_blank" rel="noopener noreferrer">🔗 Live Demo</a> | 
-                        <a href="https://github.com/Der324/Full-Stuck-Dev/tree/main/Checkout-page" target="_blank" rel="noopener noreferrer">💻 GitHub Repo</a>
-                    </p>
-                </div>
-                <div class="card">
-                    <h3>Multimedia Player</h3>
-                    <p>Custom audio/video player with caption and transcript support, showcasing advanced media controls and accessibility.</p>
-                    <p>
-                          <a href="https://raw.githack.com/Der324/Full-Stuck-Dev/main/Multimedia-player/index.html" target="_blank" rel="noopener noreferrer">🔗 Live Demo</a> | 
-                            <a href="https://github.com/Der324/Full-Stuck-Dev/tree/main/Multimedia-player" target="_blank" rel="noopener noreferrer">💻 GitHub Repo</a>
-                    </p>
-                </div>
+                <article class="card">
+                    <h3>Full-Stack Development</h3>
+                    <p>Designing and building web applications with clear logic, accessibility, and performance in mind.</p>
+                </article>
+
+                <article class="card">
+                    <h3>Digital Marketing Strategy</h3>
+                    <p>Content creation, social media direction, customer support, and growth-focused marketing.</p>
+                </article>
+
+                <article class="card">
+                    <h3>AI &amp; Emerging Tech</h3>
+                    <p>Exploring AI tools and automation to enhance productivity, decision-making, and user experience.</p>
+                </article>
             </div>
         </section>
 
-        <section id="marketing-projects">
-            <h2>Marketing Projects</h2>
-            <div class="card-grid">
-                <div class="card">
-                    <h3>Social Media Campaign Plan</h3>
-                    <p>Comprehensive campaign strategy created for a fictional brand to boost engagement, reach, and brand awareness across platforms.</p>
-                </div>
-                <div class="card">
-                    <h3>SEO Blog Articles</h3>
-                    <p>Drafted optimized content for a digital marketing website, focusing on keyword research and search engine visibility.</p>
-                </div>
-                <div class="card">
-                    <h3>Brand Guidelines</h3>
-                    <p>Developed comprehensive visual identity and tone guidelines for a fictional digital agency, ensuring consistent brand communication.</p>
-                </div>
-            </div>
+        <section id="projects">
+            <h2>Featured Project</h2>
+
+            <article class="card">
+                <h3>Amazon-like E-commerce Interface</h3>
+                <p>
+                    A structed e-commerce front-end inspired by real-world platforms, focused on state management, component structure, and user flow. This project reflects how I approach scalable UI logic.
+                </p>
+
+                <p>
+                    <span class="coming-soon">
+                        Projects details coming soon
+                    </span>
+                </p>
+            </article>
+        </section>
+
+        <section id="marktopia">
+            <h2>Martopia (Coming Soon)</h2>
+            <p>
+                I'm currently building <strong>Marktopia</strong>, a digital platform focused on helping brands grow online through stragety, design, and technology.
+            </p>
+            <p><em>Launching soon.</em></p>
         </section>
 
         <section id="contact">
-            <h2>Let's Work Together</h2>
-            <p>Ready to bring your ideas to life? I'm available for freelance projects, collaborations, and full-time opportunities.</p>
-            <p>📧 Email: <a href="mailto:ntalenderick@gmail.com">ntalenderick@gmail.com</a></p>
-            <p>📱 WhatsApp: <a href="https://wa.me/250786864031" target="_blank" rel="noopener noreferrer">+250 786 864 031</a></p>
-            <p>💼 LinkedIn: <a href="https://www.linkedin.com/in/n-derick-ntale-57711a224/" target="_blank" rel="noopener noreferrer">Connect with me</a></p>
-            <a href="mailto:ntalenderick@gmail.com" class="contact-cta">Get In Touch</a>
+            <h2>Let's Connect</h2>
+            <p> I'm open to freelance work, collaborations, and full-time opportunities.</p>
+
+            <button class="contact-cta" id="contact-toggle" aria-expanded="false" aria-controls="contact-details">
+                Get on Touch
+            </button>
+
+            <div class="contact-details" id="contact-details" aria-hidden="true">
+                <p>Tel: <a href="tel:+250786864031">+250786864031</a></p>
+                <p>Email: <a href="mailto:ntalenderick@gmail.com">ntalenderick@gmail.com</a></p>
+                <p>GitHub: <a href="https://github.com/Der324" target="_blank" rel="noopener noreferrer">github.com/Der324</a></p>
+            </div>
         </section>
     </main>
 
     <footer>
-        <p>&copy; 2025 Ntale N Derick | Marktopia. All rights reserved.</p>
+        <p>&copy; 2026 Derick N Ntale. All rights reserved.</p>
     </footer>
 
-    <script>
-        // Lazy load images
-        document.addEventListener('DOMContentLoaded', function() {
-            const logo = document.querySelector('.logo');
-            const profile = document.querySelector('.profile-pic');
-            
-            // Set actual image sources
-            logo.src = 'https://github.com/Der324/Full-Stuck-Dev/blob/main/portifolio/LOGO%20.jpg?raw=true';
-            profile.src = 'https://github.com/Der324/Full-Stuck-Dev/blob/main/portifolio/Ntale%20N.PNG?raw=true';
-        });
-    </script>
+    <script src="theme.js" defer></script>
 </body>
 </html>
