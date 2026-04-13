@@ -1,0 +1,26 @@
+{
+  "extends": [
+    "development"
+  ],
+  "hints": {
+    "compat-api/css": [
+      "default",
+      {
+        "ignore": [
+          "user-select"
+        ]
+      }
+    ]
+  },
+  "browserslist": [
+    "defaults",
+    "not ie 11",
+    "not and_chr <= 140",
+    "not chrome <= 140",
+    "not edge <= 140",
+    "not ios_saf <= 26",
+    "not opera <= 122",
+    "not safari <= 26",
+    "not samsung <= 28"
+  ]
+}

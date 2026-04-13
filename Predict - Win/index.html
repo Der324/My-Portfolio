@@ -4,135 +4,231 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Mundi Predict & Win</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="container">
-
-      <div class="header">
-        <h1>⚽ Predict & Win</h1>
-        <p id="matchLabel" class="match-label"></p>
-        <p class="subtitle">Fill in your match prediction below. One entry per match.</p>
-        <p id="countdown" class="countdown"></p>
+ 
+    <div class="bg-deco" aria-hidden="true">
+      <div class="bg-ball bg-ball--1">⚽</div>
+      <div class="bg-ball bg-ball--2">⚽</div>
+    </div>
+ 
+    <div class="container" role="main">
+ 
+      <!-- Header -->
+      <header class="header">
+        <div class="header__badge">MUNDI CENTER</div>
+        <h1 class="header__title">PREDICT <span class="accent">&</span> WIN</h1>
+        <p id="matchLabel" class="header__match"></p>
+        <p class="header__subtitle">One prediction per match · May the best fan win</p>
+        <div id="countdown" class="countdown" role="timer" aria-live="polite"></div>
+      </header>
+ 
+      <!-- Status: No match -->
+      <div id="noMatchMsg" class="status-screen hidden" role="alert">
+        <div class="status-screen__icon">⚠️</div>
+        <h2 class="status-screen__title">No Match Selected</h2>
+        <p class="status-screen__body">Please use the specific link provided to you for this match.</p>
       </div>
-
-      <!-- No match ID in URL -->
-      <div id="noMatchMsg" class="status-screen hidden">
-        <div class="status-icon">⚠️</div>
-        <h2>No match selected!</h2>
-        <p>Please use the link provided to you for the specific match.</p>
+ 
+      <!-- Status: Already submitted -->
+      <div id="alreadySubmitted" class="status-screen hidden" role="alert">
+        <div class="status-screen__icon">✅</div>
+        <h2 class="status-screen__title">You're In!</h2>
+        <p class="status-screen__body">Your prediction has been locked in. Check back after the match to see if you won!</p>
+        <div class="status-screen__tag">Good luck 🍀</div>
       </div>
-
-      <!-- Already submitted for this match -->
-      <div id="alreadySubmitted" class="status-screen hidden">
-        <div class="status-icon">✅</div>
-        <h2>You've already submitted!</h2>
-        <p>Your prediction for this match has been recorded. Good luck!</p>
+ 
+      <!-- Status: Predictions closed -->
+      <div id="closedMsg" class="status-screen hidden" role="alert">
+        <div class="status-screen__icon">⛔</div>
+        <h2 class="status-screen__title">Predictions Closed</h2>
+        <p class="status-screen__body">The match has started. No more entries are being accepted.</p>
       </div>
-
-      <!-- Predictions closed -->
-      <div id="closedMsg" class="status-screen hidden">
-        <div class="status-icon">⛔</div>
-        <h2>Predictions are closed!</h2>
-        <p>The match has already started. No more entries are accepted.</p>
-      </div>
-
-      <form id="predictionForm">
-
-        <div class="section">
-          <h3>Your Details</h3>
-
-          <label for="name">Full Name</label>
-          <input type="text" placeholder="e.g. John Doe" id="name" required>
-
-          <label for="email">Email Address</label>
-          <input type="email" placeholder="e.g. john@email.com" id="email" required>
-
-          <label for="phone">Phone Number</label>
-          <input type="tel" placeholder="e.g. +250781212121" id="phone" required>
-        </div>
-
-        <div class="section">
-          <h3>The Match</h3>
+ 
+      <!-- Form -->
+      <form id="predictionForm" novalidate>
+ 
+        <!-- Section 1: Your Details -->
+        <section class="form-section">
+          <h2 class="section-title"><span class="section-title__icon">👤</span>Your Details</h2>
+ 
+          <div class="field">
+            <label class="field__label" for="name">Full Name</label>
+            <input class="field__input" type="text" id="name" placeholder="e.g. John Doe" autocomplete="name" required>
+            <span class="field__error" id="name-error"></span>
+          </div>
+ 
+          <div class="field">
+            <label class="field__label" for="email">Email Address</label>
+            <input class="field__input" type="email" id="email" placeholder="e.g. john@email.com" autocomplete="email" required>
+            <span class="field__error" id="email-error"></span>
+          </div>
+ 
+          <div class="field">
+            <label class="field__label" for="phone">Phone Number</label>
+            <input class="field__input" type="tel" id="phone" placeholder="e.g. +250 781 212 121" autocomplete="tel" required>
+            <span class="field__error" id="phone-error"></span>
+          </div>
+        </section>
+ 
+        <!-- Section 2: The Match -->
+        <section class="form-section">
+          <h2 class="section-title"><span class="section-title__icon">🏟️</span>The Match</h2>
+          <p class="section-hint">Type the team names you want to predict on.</p>
+ 
           <div class="teams-row">
-            <div class="team-input">
-              <label for="teamA">Home Team</label>
-              <input type="text" placeholder="e.g. Liverpool" id="teamA" required>
+            <div class="field">
+              <label class="field__label" for="teamA">Home Team</label>
+              <input class="field__input" type="text" id="teamA" placeholder="e.g. Liverpool" required>
+              <span class="field__error" id="teamA-error"></span>
             </div>
-            <span class="vs">VS</span>
-            <div class="team-input">
-              <label for="teamB">Away Team</label>
-              <input type="text" placeholder="e.g. PSG" id="teamB" required>
+            <div class="vs-badge">VS</div>
+            <div class="field">
+              <label class="field__label" for="teamB">Away Team</label>
+              <input class="field__input" type="text" id="teamB" placeholder="e.g. PSG" required>
+              <span class="field__error" id="teamB-error"></span>
             </div>
           </div>
-        </div>
-
-        <div class="section">
-          <h3>🕐 First Half</h3>
-          <label>Who will be leading at half time?</label>
-          <div class="radio-group" id="fhLeaderGroup">
-            <label class="radio-option">
-              <input type="radio" name="fhLeader" value="home" required>
-              <span id="fhHomeLabel">Home Team</span>
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="fhLeader" value="away">
-              <span id="fhAwayLabel">Away Team</span>
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="fhLeader" value="Draw">
-              <span>Draw</span>
-            </label>
+        </section>
+ 
+        <!-- Section 3: First Half -->
+        <section class="form-section">
+          <h2 class="section-title"><span class="section-title__icon">🕐</span>First Half</h2>
+ 
+          <div class="field">
+            <label class="field__label">Who will be leading at half time?</label>
+            <div class="radio-group" role="radiogroup">
+              <label class="radio-card">
+                <input type="radio" name="fhLeader" value="home" required>
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span id="fhHomeLabel" class="radio-card__text">Home Team</span>
+                </span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="fhLeader" value="away">
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span id="fhAwayLabel" class="radio-card__text">Away Team</span>
+                </span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="fhLeader" value="Draw">
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span class="radio-card__text">Draw</span>
+                </span>
+              </label>
+            </div>
+            <span class="field__error" id="fhLeader-error"></span>
           </div>
-          <label for="fhGoals">Total goals in first half</label>
-          <input type="number" placeholder="e.g. 1" id="fhGoals" min="0" max="20" required>
-        </div>
-
-        <div class="section">
-          <h3>🕑 Second Half</h3>
-          <label>Who will be leading at full time?</label>
-          <div class="radio-group" id="shLeaderGroup">
-            <label class="radio-option">
-              <input type="radio" name="shLeader" value="home" required>
-              <span id="shHomeLabel">Home Team</span>
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="shLeader" value="away">
-              <span id="shAwayLabel">Away Team</span>
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="shLeader" value="Draw">
-              <span>Draw</span>
-            </label>
+ 
+          <div class="field">
+            <label class="field__label" for="fhGoals">Total goals in the first half?</label>
+            <div class="number-input-wrap">
+              <button type="button" class="num-btn" data-target="fhGoals" data-action="dec">−</button>
+              <input class="field__input field__input--number" type="number" id="fhGoals" value="0" min="0" max="20" required>
+              <button type="button" class="num-btn" data-target="fhGoals" data-action="inc">+</button>
+            </div>
+            <span class="field__error" id="fhGoals-error"></span>
           </div>
-          <label for="shGoals">Total goals in second half</label>
-          <input type="number" placeholder="e.g. 2" id="shGoals" min="0" max="20" required>
-        </div>
-
-        <div class="section">
-          <h3>🏆 Final Result</h3>
-          <label>Who will win the match?</label>
-          <div class="radio-group" id="winnerGroup">
-            <label class="radio-option">
-              <input type="radio" name="winner" value="home" required>
-              <span id="winnerHomeLabel">Home Team</span>
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="winner" value="away">
-              <span id="winnerAwayLabel">Away Team</span>
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="winner" value="Draw">
-              <span>Draw</span>
-            </label>
+        </section>
+ 
+        <!-- Section 4: Second Half -->
+        <section class="form-section form-section--alt">
+          <h2 class="section-title"><span class="section-title__icon">🕑</span>Second Half</h2>
+ 
+          <div class="field">
+            <label class="field__label">Who will be leading at full time?</label>
+            <div class="radio-group" role="radiogroup">
+              <label class="radio-card">
+                <input type="radio" name="shLeader" value="home" required>
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span id="shHomeLabel" class="radio-card__text">Home Team</span>
+                </span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="shLeader" value="away">
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span id="shAwayLabel" class="radio-card__text">Away Team</span>
+                </span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="shLeader" value="Draw">
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span class="radio-card__text">Draw</span>
+                </span>
+              </label>
+            </div>
+            <span class="field__error" id="shLeader-error"></span>
           </div>
+ 
+          <div class="field">
+            <label class="field__label" for="shGoals">Total goals in the second half?</label>
+            <div class="number-input-wrap">
+              <button type="button" class="num-btn" data-target="shGoals" data-action="dec">−</button>
+              <input class="field__input field__input--number" type="number" id="shGoals" value="0" min="0" max="20" required>
+              <button type="button" class="num-btn" data-target="shGoals" data-action="inc">+</button>
+            </div>
+            <span class="field__error" id="shGoals-error"></span>
+          </div>
+        </section>
+ 
+        <!-- Section 5: Final Result -->
+        <section class="form-section">
+          <h2 class="section-title"><span class="section-title__icon">🏆</span>Final Result</h2>
+          <p class="section-hint">Who takes the win at the final whistle?</p>
+ 
+          <div class="field">
+            <div class="radio-group radio-group--winner" role="radiogroup">
+              <label class="radio-card radio-card--large">
+                <input type="radio" name="winner" value="home" required>
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span id="winnerHomeLabel" class="radio-card__text">Home Team</span>
+                  <span class="radio-card__sub">Wins</span>
+                </span>
+              </label>
+              <label class="radio-card radio-card--large">
+                <input type="radio" name="winner" value="away">
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span id="winnerAwayLabel" class="radio-card__text">Away Team</span>
+                  <span class="radio-card__sub">Wins</span>
+                </span>
+              </label>
+              <label class="radio-card radio-card--large">
+                <input type="radio" name="winner" value="Draw">
+                <span class="radio-card__inner">
+                  <span class="radio-card__dot"></span>
+                  <span class="radio-card__text">Draw</span>
+                  <span class="radio-card__sub">Full Time</span>
+                </span>
+              </label>
+            </div>
+            <span class="field__error" id="winner-error"></span>
+          </div>
+        </section>
+ 
+        <!-- Submit -->
+        <div class="submit-area">
+          <button type="submit" id="submitBtn" class="submit-btn">
+            <span class="submit-btn__text">Submit My Prediction</span>
+            <span class="submit-btn__icon" aria-hidden="true">→</span>
+          </button>
+          <div id="msg" class="form-msg" role="alert" aria-live="polite"></div>
         </div>
-
-        <button type="submit" id="submitBtn">Submit Prediction</button>
-        <p id="msg"></p>
-
+ 
       </form>
     </div>
+ 
     <script src="./script.js"></script>
   </body>
 </html>
