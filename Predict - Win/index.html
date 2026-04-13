@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mundi Predict & Win</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="container">
+
+      <div class="header">
+        <h1>⚽ Predict & Win</h1>
+        <p id="matchLabel" class="match-label"></p>
+        <p class="subtitle">Fill in your match prediction below. One entry per match.</p>
+        <p id="countdown" class="countdown"></p>
+      </div>
+
+      <!-- No match ID in URL -->
+      <div id="noMatchMsg" class="status-screen hidden">
+        <div class="status-icon">⚠️</div>
+        <h2>No match selected!</h2>
+        <p>Please use the link provided to you for the specific match.</p>
+      </div>
+
+      <!-- Already submitted for this match -->
+      <div id="alreadySubmitted" class="status-screen hidden">
+        <div class="status-icon">✅</div>
+        <h2>You've already submitted!</h2>
+        <p>Your prediction for this match has been recorded. Good luck!</p>
+      </div>
+
+      <!-- Predictions closed -->
+      <div id="closedMsg" class="status-screen hidden">
+        <div class="status-icon">⛔</div>
+        <h2>Predictions are closed!</h2>
+        <p>The match has already started. No more entries are accepted.</p>
+      </div>
+
+      <form id="predictionForm">
+
+        <div class="section">
+          <h3>Your Details</h3>
+
+          <label for="name">Full Name</label>
+          <input type="text" placeholder="e.g. John Doe" id="name" required>
+
+          <label for="email">Email Address</label>
+          <input type="email" placeholder="e.g. john@email.com" id="email" required>
+
+          <label for="phone">Phone Number</label>
+          <input type="tel" placeholder="e.g. +250781212121" id="phone" required>
+        </div>
+
+        <div class="section">
+          <h3>The Match</h3>
+          <div class="teams-row">
+            <div class="team-input">
+              <label for="teamA">Home Team</label>
+              <input type="text" placeholder="e.g. Liverpool" id="teamA" required>
+            </div>
+            <span class="vs">VS</span>
+            <div class="team-input">
+              <label for="teamB">Away Team</label>
+              <input type="text" placeholder="e.g. PSG" id="teamB" required>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h3>🕐 First Half</h3>
+          <label>Who will be leading at half time?</label>
+          <div class="radio-group" id="fhLeaderGroup">
+            <label class="radio-option">
+              <input type="radio" name="fhLeader" value="home" required>
+              <span id="fhHomeLabel">Home Team</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="fhLeader" value="away">
+              <span id="fhAwayLabel">Away Team</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="fhLeader" value="Draw">
+              <span>Draw</span>
+            </label>
+          </div>
+          <label for="fhGoals">Total goals in first half</label>
+          <input type="number" placeholder="e.g. 1" id="fhGoals" min="0" max="20" required>
+        </div>
+
+        <div class="section">
+          <h3>🕑 Second Half</h3>
+          <label>Who will be leading at full time?</label>
+          <div class="radio-group" id="shLeaderGroup">
+            <label class="radio-option">
+              <input type="radio" name="shLeader" value="home" required>
+              <span id="shHomeLabel">Home Team</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="shLeader" value="away">
+              <span id="shAwayLabel">Away Team</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="shLeader" value="Draw">
+              <span>Draw</span>
+            </label>
+          </div>
+          <label for="shGoals">Total goals in second half</label>
+          <input type="number" placeholder="e.g. 2" id="shGoals" min="0" max="20" required>
+        </div>
+
+        <div class="section">
+          <h3>🏆 Final Result</h3>
+          <label>Who will win the match?</label>
+          <div class="radio-group" id="winnerGroup">
+            <label class="radio-option">
+              <input type="radio" name="winner" value="home" required>
+              <span id="winnerHomeLabel">Home Team</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="winner" value="away">
+              <span id="winnerAwayLabel">Away Team</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="winner" value="Draw">
+              <span>Draw</span>
+            </label>
+          </div>
+        </div>
+
+        <button type="submit" id="submitBtn">Submit Prediction</button>
+        <p id="msg"></p>
+
+      </form>
+    </div>
+    <script src="./script.js"></script>
+  </body>
+</html>
