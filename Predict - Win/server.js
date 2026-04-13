@@ -16,7 +16,8 @@ app.use(cors({
   origin: [
     "http://127.0.0.1:5500",
     "http://localhost:5500",
-    "https://my-portfolio-production-9dd4.up.railway.app"
+    "https://my-portfolio-production-9dd4.up.railway.app",
+    "https://der324.github.io", 
   ],
   methods: ["POST", "GET"],  
 }));
