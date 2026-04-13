@@ -20,7 +20,7 @@ async function checkMatchStatus() {
   if (!matchId) return;
 
   try {
-    const res = await fetch(`http://localhost:3000/status?matchId=${matchId}`);
+    const res = await fetch(`https://my-portfolio-production-9dd4.up.railway.app/status?matchId=${matchId}`);
     const data = await res.json();
 
     // Update match label in header
@@ -128,7 +128,7 @@ document.getElementById("predictionForm").addEventListener("submit", async funct
   msg.className   = "";
 
   try {
-    const res    = await fetch("http://localhost:3000/submit", {
+    const res    = await fetch("https://my-portfolio-production-9dd4.up.railway.app/submit", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(data),

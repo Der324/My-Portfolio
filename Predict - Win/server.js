@@ -13,7 +13,11 @@ const app = express();
 
 // CORS 
 app.use(cors({
-  origin: ["http://127.0.0.1:5500", "http://localhost:5500"],
+  origin: [
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "https://my-portfolio-production-9dd4.up.railway.app"
+  ],
   methods: ["POST", "GET"],  
 }));
 
