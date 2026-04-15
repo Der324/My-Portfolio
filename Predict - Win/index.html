@@ -11,6 +11,7 @@
   </head>
   <body>
  
+    <!-- Background decoration -->
     <div class="bg-deco" aria-hidden="true">
       <div class="bg-ball bg-ball--1">⚽</div>
       <div class="bg-ball bg-ball--2">⚽</div>
@@ -18,7 +19,7 @@
  
     <div class="container" role="main">
  
-      <!-- Header -->
+      <!-- ── HEADER ── -->
       <header class="header">
         <div class="header__badge">MUNDI CENTER</div>
         <h1 class="header__title">PREDICT <span class="accent">&</span> WIN</h1>
@@ -27,14 +28,14 @@
         <div id="countdown" class="countdown" role="timer" aria-live="polite"></div>
       </header>
  
-      <!-- Status: No match -->
+      <!-- ── STATUS: No match ID in URL ── -->
       <div id="noMatchMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">⚠️</div>
         <h2 class="status-screen__title">No Match Selected</h2>
         <p class="status-screen__body">Please use the specific link provided to you for this match.</p>
       </div>
  
-      <!-- Status: Already submitted -->
+      <!-- ── STATUS: Already submitted ── -->
       <div id="alreadySubmitted" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">✅</div>
         <h2 class="status-screen__title">You're In!</h2>
@@ -42,55 +43,74 @@
         <div class="status-screen__tag">Good luck 🍀</div>
       </div>
  
-      <!-- Status: Predictions closed -->
+      <!-- ── STATUS: Predictions closed ── -->
       <div id="closedMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">⛔</div>
         <h2 class="status-screen__title">Predictions Closed</h2>
         <p class="status-screen__body">The match has started. No more entries are being accepted.</p>
       </div>
  
-      <!-- Form -->
+      <!-- ── STATUS: Match ended, next match coming ── -->
+      <div id="matchEndedMsg" class="status-screen hidden" role="alert">
+        <div class="status-screen__icon">🏁</div>
+        <h2 class="status-screen__title">Match Over!</h2>
+        <p class="status-screen__body">This match has ended. Stay tuned for the next prediction window!</p>
+        <div class="status-screen__tag">See you next match 🎯</div>
+      </div>
+ 
+      <!-- ── PREDICTION FORM ── -->
       <form id="predictionForm" novalidate>
-        <input type="hidden" id="matchInput">
  
         <!-- Section 1: Your Details -->
         <section class="form-section">
-          <h2 class="section-title"><span class="section-title__icon">👤</span>Your Details</h2>
+          <h2 class="section-title">
+            <span class="section-title__icon">👤</span>Your Details
+          </h2>
  
           <div class="field">
             <label class="field__label" for="name">Full Name</label>
-            <input class="field__input" type="text" id="name" placeholder="e.g. John Doe" autocomplete="name" required>
+            <input class="field__input" type="text" id="name"
+              placeholder="e.g. John Doe"
+              autocomplete="name" maxlength="100" required>
             <span class="field__error" id="name-error"></span>
           </div>
  
           <div class="field">
             <label class="field__label" for="email">Email Address</label>
-            <input class="field__input" type="email" id="email" placeholder="e.g. john@email.com" autocomplete="email" required>
+            <input class="field__input" type="email" id="email"
+              placeholder="e.g. john@email.com"
+              autocomplete="email" maxlength="150" required>
             <span class="field__error" id="email-error"></span>
           </div>
  
           <div class="field">
             <label class="field__label" for="phone">Phone Number</label>
-            <input class="field__input" type="tel" id="phone" placeholder="e.g. +250 781 212 121" autocomplete="tel" required>
+            <input class="field__input" type="tel" id="phone"
+              placeholder="e.g. +250 781 212 121"
+              autocomplete="tel" maxlength="20" required>
             <span class="field__error" id="phone-error"></span>
           </div>
         </section>
  
         <!-- Section 2: The Match -->
         <section class="form-section">
-          <h2 class="section-title"><span class="section-title__icon">🏟️</span>The Match</h2>
-          <p class="section-hint">Type the team names you want to predict on.</p>
+          <h2 class="section-title">
+            <span class="section-title__icon">🏟️</span>The Match
+          </h2>
+          <p class="section-hint">Type in the exact team names you want to predict on.</p>
  
           <div class="teams-row">
             <div class="field">
               <label class="field__label" for="teamA">Home Team</label>
-              <input class="field__input" type="text" id="teamA" placeholder="e.g. Liverpool" required>
+              <input class="field__input" type="text" id="teamA"
+                placeholder="e.g. Liverpool" maxlength="60" required>
               <span class="field__error" id="teamA-error"></span>
             </div>
             <div class="vs-badge">VS</div>
             <div class="field">
               <label class="field__label" for="teamB">Away Team</label>
-              <input class="field__input" type="text" id="teamB" placeholder="e.g. PSG" required>
+              <input class="field__input" type="text" id="teamB"
+                placeholder="e.g. PSG" maxlength="60" required>
               <span class="field__error" id="teamB-error"></span>
             </div>
           </div>
@@ -98,11 +118,13 @@
  
         <!-- Section 3: First Half -->
         <section class="form-section">
-          <h2 class="section-title"><span class="section-title__icon">🕐</span>First Half</h2>
+          <h2 class="section-title">
+            <span class="section-title__icon">🕐</span>First Half
+          </h2>
  
           <div class="field">
             <label class="field__label">Who will be leading at half time?</label>
-            <div class="radio-group" role="radiogroup">
+            <div class="radio-group" role="radiogroup" aria-label="First half leader">
               <label class="radio-card">
                 <input type="radio" name="fhLeader" value="home" required>
                 <span class="radio-card__inner">
@@ -131,9 +153,12 @@
           <div class="field">
             <label class="field__label" for="fhGoals">Total goals in the first half?</label>
             <div class="number-input-wrap">
-              <button type="button" class="num-btn" data-target="fhGoals" data-action="dec">−</button>
-              <input class="field__input field__input--number" type="number" id="fhGoals" value="0" min="0" max="20" required>
-              <button type="button" class="num-btn" data-target="fhGoals" data-action="inc">+</button>
+              <button type="button" class="num-btn"
+                data-target="fhGoals" data-action="dec" aria-label="Decrease">−</button>
+              <input class="field__input field__input--number"
+                type="number" id="fhGoals" value="0" min="0" max="20" required>
+              <button type="button" class="num-btn"
+                data-target="fhGoals" data-action="inc" aria-label="Increase">+</button>
             </div>
             <span class="field__error" id="fhGoals-error"></span>
           </div>
@@ -141,11 +166,13 @@
  
         <!-- Section 4: Second Half -->
         <section class="form-section form-section--alt">
-          <h2 class="section-title"><span class="section-title__icon">🕑</span>Second Half</h2>
+          <h2 class="section-title">
+            <span class="section-title__icon">🕑</span>Second Half
+          </h2>
  
           <div class="field">
             <label class="field__label">Who will be leading at full time?</label>
-            <div class="radio-group" role="radiogroup">
+            <div class="radio-group" role="radiogroup" aria-label="Second half leader">
               <label class="radio-card">
                 <input type="radio" name="shLeader" value="home" required>
                 <span class="radio-card__inner">
@@ -174,9 +201,12 @@
           <div class="field">
             <label class="field__label" for="shGoals">Total goals in the second half?</label>
             <div class="number-input-wrap">
-              <button type="button" class="num-btn" data-target="shGoals" data-action="dec">−</button>
-              <input class="field__input field__input--number" type="number" id="shGoals" value="0" min="0" max="20" required>
-              <button type="button" class="num-btn" data-target="shGoals" data-action="inc">+</button>
+              <button type="button" class="num-btn"
+                data-target="shGoals" data-action="dec" aria-label="Decrease">−</button>
+              <input class="field__input field__input--number"
+                type="number" id="shGoals" value="0" min="0" max="20" required>
+              <button type="button" class="num-btn"
+                data-target="shGoals" data-action="inc" aria-label="Increase">+</button>
             </div>
             <span class="field__error" id="shGoals-error"></span>
           </div>
@@ -184,11 +214,14 @@
  
         <!-- Section 5: Final Result -->
         <section class="form-section">
-          <h2 class="section-title"><span class="section-title__icon">🏆</span>Final Result</h2>
+          <h2 class="section-title">
+            <span class="section-title__icon">🏆</span>Final Result
+          </h2>
           <p class="section-hint">Who takes the win at the final whistle?</p>
  
           <div class="field">
-            <div class="radio-group radio-group--winner" role="radiogroup">
+            <div class="radio-group radio-group--winner"
+              role="radiogroup" aria-label="Match winner">
               <label class="radio-card radio-card--large">
                 <input type="radio" name="winner" value="home" required>
                 <span class="radio-card__inner">
