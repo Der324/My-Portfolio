@@ -3,8 +3,8 @@
 // ════════════════════════════════════════
 const API = "https://my-portfolio-production-9dd4.up.railway.app";
  
-let matchId   = null;
-let storageKey = null;
+let matchId        = null;
+let storageKey     = null;
 let countdownTimer = null;
  
 // ════════════════════════════════════════
@@ -25,10 +25,10 @@ function showOnly(id) {
 }
  
 // ════════════════════════════════════════
-//  FETCH ACTIVE MATCH (PUBLIC)
-//  NOTE: /matches no longer returns labels —
-//  the match label is admin-only information.
-//  The header subtitle stays as-is from HTML.
+//  FETCH ACTIVE MATCH
+//  Returns { match } on success,
+//  { networkError: true } on connection failure,
+//  null when no active match exists.
 // ════════════════════════════════════════
 async function getActiveMatch() {
   try {
@@ -36,20 +36,16 @@ async function getActiveMatch() {
     const matches = await res.json();
  
     const now = new Date();
-    let activeMatches = [];
+    const activeMatches = [];
  
     for (const id in matches) {
       const kickoff = new Date(matches[id].kickoff);
       const end     = new Date(kickoff.getTime() + 2 * 60 * 60 * 1000);
- 
-      if (now < end) {
-        activeMatches.push({ id, ...matches[id], kickoff });
-      }
+      if (now < end) activeMatches.push({ id, ...matches[id], kickoff });
     }
  
     if (activeMatches.length === 0) return null;
  
-    // Pick nearest kickoff
     activeMatches.sort((a, b) => a.kickoff - b.kickoff);
     const selected = activeMatches[0];
  
@@ -59,15 +55,13 @@ async function getActiveMatch() {
     return selected;
  
   } catch (err) {
-    console.error("Failed to fetch matches", err);
-    return null;
+    console.error("Failed to fetch matches:", err);
+    return { networkError: true };
   }
 }
  
 // ════════════════════════════════════════
 //  FETCH NEXT UPCOMING MATCH
-//  Used after a match ends to show a
-//  "next match in X" countdown.
 // ════════════════════════════════════════
 async function getNextMatch() {
   try {
@@ -75,30 +69,45 @@ async function getNextMatch() {
     const data = await res.json();
     return data.found ? data : null;
   } catch (err) {
-    console.error("Failed to fetch next match", err);
+    console.error("Failed to fetch next match:", err);
     return null;
   }
 }
  
 // ════════════════════════════════════════
 //  INIT
+//  FIX: retries once after 2.5s on network
+//  error to handle Railway cold starts.
+//  FIX: distinguishes network errors from
+//  "no match" so users see the right message.
 // ════════════════════════════════════════
 async function init() {
-  // Clear the match label — it's admin-only
   const matchLabelEl = document.getElementById("matchLabel");
   if (matchLabelEl) matchLabelEl.innerText = "";
  
-  const match = await getActiveMatch();
+  let matchResult = await getActiveMatch();
  
-  if (!match) {
-    // No active or upcoming match at all
+  // Railway cold start can take ~2s — retry once on network failure
+  if (matchResult && matchResult.networkError) {
+    await new Promise(r => setTimeout(r, 2500));
+    matchResult = await getActiveMatch();
+  }
+ 
+  // Still failing after retry — show "no match" rather than misleading message
+  if (matchResult && matchResult.networkError) {
     showOnly("matchEndedMsg");
-    // Still try to show a countdown to the next match
+    const countdown = document.getElementById("countdown");
+    if (countdown) countdown.innerText = "⚠️ Could not connect — please refresh";
+    return;
+  }
+ 
+  if (!matchResult) {
+    showOnly("matchEndedMsg");
     startPostMatchCountdown();
     return;
   }
  
-  const kickoff = new Date(match.kickoff);
+  const kickoff = new Date(matchResult.kickoff);
  
   try {
     const res    = await fetch(`${API}/status?matchId=${matchId}`);
@@ -111,13 +120,11 @@ async function init() {
     }
  
     if (!status.open) {
-      // Match has kicked off — predictions closed
       showOnly("closedMsg");
       startPreMatchCountdown(kickoff);
       return;
     }
  
-    // Predictions open
     if (localStorage.getItem(storageKey)) {
       showOnly("alreadySubmitted");
     } else {
@@ -127,7 +134,7 @@ async function init() {
     startPreMatchCountdown(kickoff);
  
   } catch (err) {
-    console.error("Status check failed", err);
+    console.error("Status check failed:", err);
     showOnly("matchEndedMsg");
     startPostMatchCountdown();
   }
@@ -136,11 +143,7 @@ async function init() {
 init();
  
 // ════════════════════════════════════════
-//  COUNTDOWN — PHASE 1
-//  Shows "Match starts in X" until kickoff.
-//  Switches to "closed" state at kickoff and
-//  counts down the remaining match time.
-//  When match ends, switches to phase 2.
+//  COUNTDOWN — PHASE 1 (pre-match & in-match)
 // ════════════════════════════════════════
 function startPreMatchCountdown(kickoff) {
   if (countdownTimer) clearTimeout(countdownTimer);
@@ -152,30 +155,24 @@ function startPreMatchCountdown(kickoff) {
     const now = new Date();
  
     if (now < kickoff) {
-      // Before kickoff — show time to match start
       const diff = kickoff - now;
       const h    = Math.floor(diff / 3600000);
       const m    = Math.floor((diff % 3600000) / 60000);
       const s    = Math.floor((diff % 60000) / 1000);
- 
       el.innerText = `⏱ Predictions close in ${h}h ${pad(m)}m ${pad(s)}s`;
  
     } else if (now < matchEnd) {
-      // Match in progress — show time until predictions re-open for next match
       const diff = matchEnd - now;
       const m    = Math.floor(diff / 60000);
       const s    = Math.floor((diff % 60000) / 1000);
- 
       el.innerText = `⏳ Match in progress — ends in ${m}m ${pad(s)}s`;
  
-      // Switch UI to "closed" if it isn't already
       const closed = document.getElementById("closedMsg");
       if (closed && closed.classList.contains("hidden")) {
         showOnly("closedMsg");
       }
  
     } else {
-      // Match over — switch to post-match countdown
       el.innerText = "";
       showOnly("matchEndedMsg");
       startPostMatchCountdown();
@@ -189,10 +186,7 @@ function startPreMatchCountdown(kickoff) {
 }
  
 // ════════════════════════════════════════
-//  COUNTDOWN — PHASE 2
-//  After a match ends, fetches the next
-//  scheduled match and counts down to it.
-//  If no next match exists, hides countdown.
+//  COUNTDOWN — PHASE 2 (post-match)
 // ════════════════════════════════════════
 async function startPostMatchCountdown() {
   if (countdownTimer) clearTimeout(countdownTimer);
@@ -212,7 +206,6 @@ async function startPostMatchCountdown() {
     const diff = nextKickoff - now;
  
     if (diff <= 0) {
-      // Next match is starting — reload to pick it up
       el.innerText = "🎯 Next match starting now!";
       setTimeout(() => location.reload(), 3000);
       return;
@@ -223,11 +216,9 @@ async function startPostMatchCountdown() {
     const m = Math.floor((diff % 3600000) / 60000);
     const s = Math.floor((diff % 60000) / 1000);
  
-    if (d > 0) {
-      el.innerText = `🎯 Next match in ${d}d ${h}h ${pad(m)}m`;
-    } else {
-      el.innerText = `🎯 Next match in ${h}h ${pad(m)}m ${pad(s)}s`;
-    }
+    el.innerText = d > 0
+      ? `🎯 Next match in ${d}d ${h}h ${pad(m)}m`
+      : `🎯 Next match in ${h}h ${pad(m)}m ${pad(s)}s`;
  
     countdownTimer = setTimeout(update, 1000);
   }
@@ -262,15 +253,15 @@ document.querySelectorAll(".num-btn").forEach(btn => {
 // ════════════════════════════════════════
 document.getElementById("teamA").addEventListener("input", function () {
   const name = this.value.trim() || "Home Team";
-  document.getElementById("fhHomeLabel").innerText    = name;
-  document.getElementById("shHomeLabel").innerText    = name;
+  document.getElementById("fhHomeLabel").innerText     = name;
+  document.getElementById("shHomeLabel").innerText     = name;
   document.getElementById("winnerHomeLabel").innerText = name;
 });
  
 document.getElementById("teamB").addEventListener("input", function () {
   const name = this.value.trim() || "Away Team";
-  document.getElementById("fhAwayLabel").innerText    = name;
-  document.getElementById("shAwayLabel").innerText    = name;
+  document.getElementById("fhAwayLabel").innerText     = name;
+  document.getElementById("shAwayLabel").innerText     = name;
   document.getElementById("winnerAwayLabel").innerText = name;
 });
  
@@ -301,8 +292,7 @@ function clearError(fieldId) {
 }
  
 function clearAllErrors() {
-  ["name", "email", "phone", "teamA", "teamB", "fhGoals", "shGoals"]
-    .forEach(clearError);
+  ["name", "email", "phone", "teamA", "teamB", "fhGoals", "shGoals"].forEach(clearError);
   ["fhLeader-error", "shLeader-error", "winner-error"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerText = "";
@@ -313,14 +303,14 @@ function validateForm(d) {
   let valid = true;
   clearAllErrors();
  
-  if (!d.name.trim())  { showError("name",  "Enter your name"); valid = false; }
+  if (!d.name.trim())  { showError("name",  "Enter your name");  valid = false; }
  
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(d.email)) { showError("email", "Invalid email"); valid = false; }
  
-  if (!d.phone.trim()) { showError("phone", "Enter phone");      valid = false; }
-  if (!d.teamA.trim()) { showError("teamA", "Enter home team");  valid = false; }
-  if (!d.teamB.trim()) { showError("teamB", "Enter away team");  valid = false; }
+  if (!d.phone.trim()) { showError("phone", "Enter phone");       valid = false; }
+  if (!d.teamA.trim()) { showError("teamA", "Enter home team");   valid = false; }
+  if (!d.teamB.trim()) { showError("teamB", "Enter away team");   valid = false; }
  
   if (!d.fhLeaderRaw) { document.getElementById("fhLeader-error").innerText = "Required"; valid = false; }
   if (!d.shLeaderRaw) { document.getElementById("shLeader-error").innerText = "Required"; valid = false; }
@@ -350,11 +340,7 @@ document.getElementById("predictionForm")
       name:       document.getElementById("name").value,
       email:      document.getElementById("email").value,
       phone:      document.getElementById("phone").value,
-      teamA,
-      teamB,
-      fhLeaderRaw,
-      shLeaderRaw,
-      winnerRaw,
+      teamA, teamB, fhLeaderRaw, shLeaderRaw, winnerRaw,
       fhGoals:    document.getElementById("fhGoals").value,
       shGoals:    document.getElementById("shGoals").value,
     };
@@ -366,8 +352,7 @@ document.getElementById("predictionForm")
       name:     raw.name.trim(),
       email:    raw.email.trim(),
       phone:    raw.phone.trim(),
-      teamA,
-      teamB,
+      teamA, teamB,
       fhLeader: resolveTeam(fhLeaderRaw, teamA, teamB),
       fhGoals:  raw.fhGoals,
       shLeader: resolveTeam(shLeaderRaw, teamA, teamB),
@@ -399,7 +384,7 @@ document.getElementById("predictionForm")
       }
  
     } catch {
-      msg.innerText = "Network error — please check your connection.";
+      msg.innerText = "Network error — please check your connection and try again.";
       msg.className = "form-msg error";
       btn.disabled  = false;
       btn.querySelector(".submit-btn__text").innerText = "Submit My Prediction";
