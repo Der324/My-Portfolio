@@ -229,7 +229,7 @@ app.post("/submit", submitLimiter, async (req, res) => {
     subject: `⚽ New Prediction: ${clean.teamA} vs ${clean.teamB} — ${clean.name}`,
     text: `
 ====================================
-  MATCH PREDICTION RECEIVED
+  ⚽ NEW MATCH PREDICTION
 ====================================
  
 PARTICIPANT DETAILS
@@ -238,8 +238,7 @@ Name  : ${clean.name}
 Email : ${clean.email}
 Phone : ${clean.phone}
  
-MATCH [${data.matchId}]
-------------------------------------
+🏟 MATCH
 ${clean.teamA} vs ${clean.teamB}
  
 FIRST HALF PREDICTION
@@ -302,6 +301,11 @@ app.post("/admin/match", adminLimiter, async (req, res) => {
  
   res.json({ status: "Match added", matchId, label, kickoff });
 });
+
+// Public Route - Get all Matches
+app.get("/matches", (req, res) => {
+  res.json(getAllMatches());
+})
  
 // ════════════════════════════════════════
 //  GET /admin/matches — list all matches
