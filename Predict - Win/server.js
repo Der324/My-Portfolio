@@ -11,7 +11,7 @@ const path       = require("path");
 const app = express();
  
 // ════════════════════════════════════════
-//  CORS — only allow known frontend origins
+//  CORS
 // ════════════════════════════════════════
 app.use(cors({
   origin: [
@@ -29,7 +29,7 @@ app.use(express.json());
 //  RATE LIMITING
 // ════════════════════════════════════════
 const submitLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 10,
   message: { error: "Too many submissions. Please try again later." },
   standardHeaders: true,
@@ -37,7 +37,7 @@ const submitLimiter = rateLimit({
 });
  
 const statusLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
@@ -52,7 +52,6 @@ const adminLimiter = rateLimit({
  
 // ════════════════════════════════════════
 //  DATABASE
-//  File: submissions.json (matches .gitignore)
 // ════════════════════════════════════════
 const dbFile  = path.join(__dirname, "submissions.json");
 const adapter = new JSONFile(dbFile);
@@ -78,23 +77,19 @@ const transporter = nodemailer.createTransport({
   },
 });
  
-// ════════════════════════════════════════
-//  DEFAULT MATCHES
-//  Change kickoff dates here each match
-// ════════════════════════════════════════
-const DEFAULT_MATCHES = {
-  "match-001": {
-    label:   "Liverpool vs PSG",
-    kickoff: "2026-04-20T15:00:00Z",
-  },
-  "match-002": {
-    label:   "Arsenal vs Chelsea",
-    kickoff: "2026-04-20T17:30:00Z",
-  },
-};
+// Send email in background — never blocks the HTTP response
+function sendEmailAsync(mailOptions) {
+  transporter.sendMail(mailOptions).catch(err => {
+    console.error("Email notification failed:", err.message);
+  });
+}
  
+// ════════════════════════════════════════
+//  NO DEFAULT MATCHES — admin adds them all
+//  Matches are only stored in the database
+// ════════════════════════════════════════
 function getAllMatches() {
-  return { ...DEFAULT_MATCHES, ...db.data.matches };
+  return { ...db.data.matches };
 }
  
 // ════════════════════════════════════════
@@ -106,18 +101,79 @@ const sanitize = (str) =>
     .trim()
     .slice(0, 100);
  
-// Match end = kickoff + 2 hours (adjustable)
+// Match duration: 2 hours after kickoff
 function getMatchEnd(kickoff) {
   return new Date(new Date(kickoff).getTime() + 2 * 60 * 60 * 1000);
 }
  
 // ════════════════════════════════════════
-//  GET /status?matchId=match-001
-//  Returns open/closed state + label + kickoff
-//  Also returns matchEnded flag for auto-reset
+//  GET /matches  (public — used by frontend)
+//  Returns only upcoming / currently active matches
+//  Does NOT expose labels (admin-only info stripped)
+//  Frontend only needs kickoff + matchId to drive
+//  the countdown; label shown only in admin view.
+// ════════════════════════════════════════
+app.get("/matches", statusLimiter, async (req, res) => {
+  await db.read();
+  const matches = getAllMatches();
+  const now = new Date();
+ 
+  // Return all matches that haven't fully ended yet,
+  // stripping the label so it never appears on the public page.
+  const publicMatches = {};
+  for (const id in matches) {
+    const kickoff  = new Date(matches[id].kickoff);
+    const matchEnd = getMatchEnd(kickoff);
+    if (now < matchEnd) {
+      publicMatches[id] = {
+        kickoff: matches[id].kickoff,
+        // label intentionally omitted — admin-only
+      };
+    }
+  }
+ 
+  res.json(publicMatches);
+});
+ 
+// ════════════════════════════════════════
+//  GET /next-match  (public)
+//  Returns the nearest upcoming match kickoff
+//  so the frontend can show a "next match in X"
+//  countdown after the current match ends.
+// ════════════════════════════════════════
+app.get("/next-match", statusLimiter, async (req, res) => {
+  await db.read();
+  const matches = getAllMatches();
+  const now = new Date();
+ 
+  let upcoming = [];
+  for (const id in matches) {
+    const kickoff = new Date(matches[id].kickoff);
+    if (kickoff > now) {
+      upcoming.push({ id, kickoff });
+    }
+  }
+ 
+  if (upcoming.length === 0) {
+    return res.json({ found: false });
+  }
+ 
+  upcoming.sort((a, b) => a.kickoff - b.kickoff);
+  const next = upcoming[0];
+ 
+  res.json({
+    found: true,
+    kickoff: next.kickoff.toISOString(),
+    matchId: next.id,
+  });
+});
+ 
+// ════════════════════════════════════════
+//  GET /status?matchId=...
 // ════════════════════════════════════════
 app.get("/status", statusLimiter, async (req, res) => {
   const { matchId } = req.query;
+  await db.read();
   const matches = getAllMatches();
  
   if (!matchId || !matches[matchId]) {
@@ -131,13 +187,11 @@ app.get("/status", statusLimiter, async (req, res) => {
   const open     = now < kickoff;
   const ended    = now >= matchEnd;
  
-  await db.read();
   const count = (db.data.submissions[matchId] || []).length;
  
   res.json({
     open,
-    ended,       // ← frontend uses this to auto-reset localStorage
-    label:   match.label,
+    ended,
     kickoff: match.kickoff,
     matchEnd: matchEnd.toISOString(),
     total:   count,
@@ -156,17 +210,14 @@ app.post("/submit", submitLimiter, async (req, res) => {
   const matches = getAllMatches();
   const match   = matches[data.matchId];
  
-  // Validate match ID
   if (!match) {
     return res.status(404).json({ error: "Invalid match." });
   }
  
-  // Block after kickoff
   if (now >= new Date(match.kickoff)) {
     return res.status(403).json({ error: "Predictions are closed. The match has started." });
   }
  
-  // Sanitize all inputs
   const clean = {
     name:     sanitize(data.name),
     email:    sanitize(data.email).toLowerCase(),
@@ -180,7 +231,6 @@ app.post("/submit", submitLimiter, async (req, res) => {
     winner:   sanitize(data.winner),
   };
  
-  // Validate required text fields
   const requiredText = ["name", "email", "phone", "teamA", "teamB",
                         "fhLeader", "shLeader", "winner"];
   for (const field of requiredText) {
@@ -189,13 +239,11 @@ app.post("/submit", submitLimiter, async (req, res) => {
     }
   }
  
-  // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(clean.email)) {
     return res.status(400).json({ error: "Invalid email address." });
   }
  
-  // Validate goal values
   if (
     isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
     clean.fhGoals < 0   || clean.shGoals < 0     ||
@@ -204,7 +252,6 @@ app.post("/submit", submitLimiter, async (req, res) => {
     return res.status(400).json({ error: "Invalid goal values (must be 0–20)." });
   }
  
-  // Check duplicate — email only (IP removed: unreliable on shared networks)
   db.data.submissions[data.matchId] ||= [];
   const alreadySubmitted = db.data.submissions[data.matchId]
     .some(entry => entry.email === clean.email);
@@ -215,17 +262,20 @@ app.post("/submit", submitLimiter, async (req, res) => {
     });
   }
  
-  // Save to database BEFORE sending email
+  // Save first — respond fast
   db.data.submissions[data.matchId].push({
     ...clean,
     submittedAt: now.toISOString(),
   });
   await db.write();
  
-  // Send email notification
-  const mailOptions = {
+  // Respond immediately — don't wait for email
+  res.json({ status: "success" });
+ 
+  // Send email in background (non-blocking)
+  sendEmailAsync({
     from:    process.env.GMAIL_USER,
-    to:      process.env.GMAIL_USER,
+    to:      "ntalenderick@gmail.com",
     subject: `⚽ New Prediction: ${clean.teamA} vs ${clean.teamB} — ${clean.name}`,
     text: `
 ====================================
@@ -240,6 +290,7 @@ Phone : ${clean.phone}
  
 🏟 MATCH
 ${clean.teamA} vs ${clean.teamB}
+(Match ID: ${data.matchId})
  
 FIRST HALF PREDICTION
 ------------------------------------
@@ -259,16 +310,7 @@ Winner       : ${clean.winner}
 Submitted at : ${now.toUTCString()}
 ====================================
     `,
-  };
- 
-  try {
-    await transporter.sendMail(mailOptions);
-  } catch (emailErr) {
-    // Prediction already saved — log email failure but don't fail the request
-    console.error("Email notification failed:", emailErr.message);
-  }
- 
-  res.json({ status: "success" });
+  });
 });
  
 // ════════════════════════════════════════
@@ -277,7 +319,6 @@ Submitted at : ${now.toUTCString()}
 app.post("/admin/match", adminLimiter, async (req, res) => {
   const { secret, matchId, label, kickoff } = req.body;
  
-  // Require admin secret
   if (!secret || secret !== process.env.ADMIN_SECRET) {
     return res.status(403).json({ error: "Unauthorized." });
   }
@@ -301,25 +342,20 @@ app.post("/admin/match", adminLimiter, async (req, res) => {
  
   res.json({ status: "Match added", matchId, label, kickoff });
 });
-
-// Public Route - Get all Matches
-app.get("/matches", (req, res) => {
-  res.json(getAllMatches());
-})
  
 // ════════════════════════════════════════
-//  GET /admin/matches — list all matches
+//  GET /admin/matches — list all matches (with labels)
 // ════════════════════════════════════════
-app.get("/admin/matches", adminLimiter, (req, res) => {
+app.get("/admin/matches", adminLimiter, async (req, res) => {
   if (req.query.secret !== process.env.ADMIN_SECRET) {
     return res.status(403).json({ error: "Unauthorized." });
   }
+  await db.read();
   res.json(getAllMatches());
 });
  
 // ════════════════════════════════════════
-//  GET /admin/submissions — view all entries
-//  Protected by ADMIN_SECRET
+//  GET /admin/submissions
 // ════════════════════════════════════════
 app.get("/admin/submissions", adminLimiter, async (req, res) => {
   if (req.query.secret !== process.env.ADMIN_SECRET) {
@@ -330,8 +366,7 @@ app.get("/admin/submissions", adminLimiter, async (req, res) => {
 });
  
 // ════════════════════════════════════════
-//  POST /admin/reset — clear submissions
-//  for a specific match after it ends
+//  POST /admin/reset
 // ════════════════════════════════════════
 app.post("/admin/reset", adminLimiter, async (req, res) => {
   const { secret, matchId } = req.body;
@@ -363,7 +398,7 @@ process.on("unhandledRejection", (err) => {
 });
  
 // ════════════════════════════════════════
-//  START SERVER
+//  START
 // ════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
  

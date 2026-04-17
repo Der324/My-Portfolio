@@ -22,13 +22,13 @@
       <!-- ── HEADER ── -->
       <header class="header">
         <div class="header__badge">MUNDI CENTER</div>
-        <h1 class="header__title">PREDICT <span class="accent">&</span> WIN</h1>
-        <p id="matchLabel" class="header__match"></p>
+        <h1 class="header__title">PREDICT <span class="accent">&amp;</span> WIN</h1>
+        <!-- matchLabel intentionally removed — match name is admin-only info -->
         <p class="header__subtitle">One prediction per match · May the best fan win</p>
         <div id="countdown" class="countdown" role="timer" aria-live="polite"></div>
       </header>
  
-      <!-- ── STATUS: No match ID in URL ── -->
+      <!-- ── STATUS: No active match ── -->
       <div id="noMatchMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">⚠️</div>
         <h2 class="status-screen__title">No Match Selected</h2>
@@ -43,18 +43,18 @@
         <div class="status-screen__tag">Good luck 🍀</div>
       </div>
  
-      <!-- ── STATUS: Predictions closed ── -->
+      <!-- ── STATUS: Predictions closed (match started) ── -->
       <div id="closedMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">⛔</div>
         <h2 class="status-screen__title">Predictions Closed</h2>
         <p class="status-screen__body">The match has started. No more entries are being accepted.</p>
       </div>
  
-      <!-- ── STATUS: Match ended, next match coming ── -->
+      <!-- ── STATUS: Match ended / no current match ── -->
       <div id="matchEndedMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">🏁</div>
-        <h2 class="status-screen__title">Match Over!</h2>
-        <p class="status-screen__body">This match has ended. Stay tuned for the next prediction window!</p>
+        <h2 class="status-screen__title">No Active Match</h2>
+        <p class="status-screen__body">There is no active prediction window right now. Stay tuned for the next match!</p>
         <div class="status-screen__tag">See you next match 🎯</div>
       </div>
  
