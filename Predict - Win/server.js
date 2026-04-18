@@ -462,6 +462,67 @@ app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
 });
  
 // ════════════════════════════════════════
+//  GET /admin/test-email
+//  Sends a real test email to ntalenderick@gmail.com
+//  so you can confirm Gmail credentials work.
+//
+//  Usage — paste this in your browser
+//  (replace YOUR_ADMIN_SECRET with your ADMIN_SECRET
+//  from Railway Variables, NOT the Gmail password):
+//
+//  https://my-portfolio-production-9dd4.up.railway.app
+//    /admin/test-email?secret=YOUR_ADMIN_SECRET
+// ════════════════════════════════════════
+app.get("/admin/test-email", adminLimiter, async (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({
+      error: "Unauthorized.",
+      hint:  "?secret= must be your ADMIN_SECRET from Railway Variables, not the Gmail password.",
+    });
+  }
+ 
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = (process.env.GMAIL_PASSWORD || "").replace(/\s/g, "");
+ 
+  if (!gmailUser || !gmailPass) {
+    return res.status(500).json({
+      error: "GMAIL_USER or GMAIL_PASSWORD is missing from Railway Variables.",
+    });
+  }
+ 
+  try {
+    const info = await transporter.sendMail({
+      from:    gmailUser,
+      to:      "ntalenderick@gmail.com",
+      subject: "Mundi Predict & Win — Email Test",
+      text:
+        "This is a test email from your Mundi Predict & Win server.\n\n" +
+        "If you received this, your Gmail credentials are working correctly.\n\n" +
+        "Sent from: " + gmailUser + "\n" +
+        "Time: " + new Date().toUTCString(),
+    });
+ 
+    console.log("Test email sent OK:", info.messageId);
+    res.json({
+      status:    "Email sent successfully",
+      to:        "ntalenderick@gmail.com",
+      messageId: info.messageId,
+      note:      "Check your inbox and spam folder.",
+    });
+ 
+  } catch (err) {
+    console.error("Test email failed:", err.message, "| code:", err.code);
+    res.status(500).json({
+      error:  "Email send failed: " + err.message,
+      code:   err.code,
+      fix:    err.code === "EAUTH"
+        ? "Wrong Gmail credentials. Make sure GMAIL_PASSWORD in Railway has no spaces."
+        : "Check Railway logs for more detail.",
+    });
+  }
+});
+ 
+// ════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
 //  Flush pending email batch before Railway
 //  restarts the server so nothing is lost.
