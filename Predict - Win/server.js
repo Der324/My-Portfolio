@@ -1,3 +1,13 @@
+// ════════════════════════════════════════
+//  FORCE IPv4 — must be the very first lines.
+//  Railway cannot reach IPv6. family:4 in
+//  createTransport is ignored by newer
+//  nodemailer versions. This fixes DNS
+//  globally before any connection is made.
+// ════════════════════════════════════════
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
+ 
 require("dotenv").config();
  
 const express    = require("express");
