@@ -11,6 +11,15 @@ const path       = require("path");
 const app = express();
  
 // ════════════════════════════════════════
+//  TRUST PROXY
+//  Railway sits behind a load balancer that
+//  sets X-Forwarded-For. Without this, rate
+//  limiting misidentifies every user as the
+//  same IP and blocks them all together.
+// ════════════════════════════════════════
+app.set("trust proxy", 1);
+ 
+// ════════════════════════════════════════
 //  CORS
 // ════════════════════════════════════════
 app.use(cors({
@@ -110,7 +119,13 @@ function queueWrite(fn) {
 //  regardless of how it is stored in Railway.
 // ════════════════════════════════════════
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  // FIX: Railway containers cannot reach IPv6 addresses.
+  // service:"gmail" resolves to IPv6 (2607:f8b0:...) causing ENETUNREACH.
+  // Using explicit host + family:4 forces nodemailer to use IPv4 only.
+  host:   "smtp.gmail.com",
+  port:   465,
+  secure: true,
+  family: 4,           // force IPv4 — critical for Railway
   auth: {
     user: process.env.GMAIL_USER,
     pass: (process.env.GMAIL_PASSWORD || "").replace(/\s/g, ""),
