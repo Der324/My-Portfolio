@@ -17,6 +17,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.2",
     "lowdb": "^7.0.1",
-    "nodemailer": "^8.0.5"
+    "nodemailer": "^8.0.5",
+    "resend": "^6.12.0"
   }
 }
