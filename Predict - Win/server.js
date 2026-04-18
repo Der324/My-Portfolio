@@ -99,19 +99,44 @@ function queueWrite(fn) {
  
 // ════════════════════════════════════════
 //  EMAIL TRANSPORTER
+//
+//  ROOT CAUSE OF MISSING EMAILS:
+//  Google shows App Passwords with spaces:
+//  "rlyz ltjd mlcl jwte" — but the real
+//  password has NO spaces: "rlyzltjdmlcljwte"
+//  Railway stored it with spaces → EAUTH
+//  failure on every send, silently dropped.
+//  The .replace() below fixes this permanently
+//  regardless of how it is stored in Railway.
 // ════════════════════════════════════════
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_PASSWORD,
+    pass: (process.env.GMAIL_PASSWORD || "").replace(/\s/g, ""),
   },
 });
  
+// Verify on startup — appears in Railway logs within seconds of deploy
+transporter.verify((err) => {
+  if (err) {
+    console.error("EMAIL CONFIG FAILED:", err.message);
+    console.error("Check GMAIL_USER and GMAIL_PASSWORD in Railway Variables.");
+    console.error("GMAIL_PASSWORD must be 16-char App Password — no spaces.");
+  } else {
+    console.log("Email config OK — ready to send to ntalenderick@gmail.com");
+  }
+});
+ 
 function sendEmailAsync(mailOptions) {
-  transporter.sendMail(mailOptions).catch(err => {
-    console.error("Email notification failed:", err.message);
-  });
+  transporter.sendMail(mailOptions)
+    .then(info => console.log("Email sent OK:", info.messageId))
+    .catch(err => {
+      console.error("Email send FAILED:", err.message, "| code:", err.code);
+      if (err.code === "EAUTH") {
+        console.error("EAUTH = wrong credentials. Fix GMAIL_PASSWORD in Railway (remove spaces).");
+      }
+    });
 }
  
 // ════════════════════════════════════════
