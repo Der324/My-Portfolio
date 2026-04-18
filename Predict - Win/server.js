@@ -129,16 +129,21 @@ function queueWrite(fn) {
 //  regardless of how it is stored in Railway.
 // ════════════════════════════════════════
 const transporter = nodemailer.createTransport({
-  // FIX: Railway containers cannot reach IPv6 addresses.
-  // service:"gmail" resolves to IPv6 (2607:f8b0:...) causing ENETUNREACH.
-  // Using explicit host + family:4 forces nodemailer to use IPv4 only.
-  host:   "smtp.gmail.com",
-  port:   465,
-  secure: true,
-  family: 4,           // force IPv4 — critical for Railway
+  // FIX: Port 465 (SMTPS/SSL) is blocked by Railway firewall — connection times out.
+  // Port 587 with STARTTLS is allowed. secure:false + requireTLS:true
+  // upgrades the connection to TLS after handshake (standard STARTTLS flow).
+  // dns.setDefaultResultOrder("ipv4first") at top of file handles IPv4.
+  host:       "smtp.gmail.com",
+  port:       587,
+  secure:     false,       // false = STARTTLS (port 587), not SSL (port 465)
+  requireTLS: true,        // force TLS upgrade — rejects if server won't upgrade
+  family:     4,           // belt-and-suspenders IPv4 hint
   auth: {
     user: process.env.GMAIL_USER,
     pass: (process.env.GMAIL_PASSWORD || "").replace(/\s/g, ""),
+  },
+  tls: {
+    rejectUnauthorized: true,  // keep security — do not disable certificate check
   },
 });
  
