@@ -13,7 +13,7 @@ require("dotenv").config();
 const express    = require("express");
 const cors       = require("cors");
 const rateLimit  = require("express-rate-limit");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 const { Low }    = require("lowdb");
 const { JSONFile } = require("lowdb/node");
 const path       = require("path");
@@ -117,56 +117,39 @@ function queueWrite(fn) {
 }
  
 // ════════════════════════════════════════
-//  EMAIL TRANSPORTER
-//
-//  ROOT CAUSE OF MISSING EMAILS:
-//  Google shows App Passwords with spaces:
-//  "rlyz ltjd mlcl jwte" — but the real
-//  password has NO spaces: "rlyzltjdmlcljwte"
-//  Railway stored it with spaces → EAUTH
-//  failure on every send, silently dropped.
-//  The .replace() below fixes this permanently
-//  regardless of how it is stored in Railway.
+//  EMAIL — RESEND API (HTTP, not SMTP)
+//  Railway blocks all SMTP ports (25/465/587).
+//  Resend uses HTTPS (port 443) which Railway
+//  never blocks. Free tier: 3,000 emails/month.
+//  Setup: resend.com → API Keys → add RESEND_API_KEY
+//  to Railway Variables.
 // ════════════════════════════════════════
-const transporter = nodemailer.createTransport({
-  // FIX: Port 465 (SMTPS/SSL) is blocked by Railway firewall — connection times out.
-  // Port 587 with STARTTLS is allowed. secure:false + requireTLS:true
-  // upgrades the connection to TLS after handshake (standard STARTTLS flow).
-  // dns.setDefaultResultOrder("ipv4first") at top of file handles IPv4.
-  host:       "smtp.gmail.com",
-  port:       587,
-  secure:     false,       // false = STARTTLS (port 587), not SSL (port 465)
-  requireTLS: true,        // force TLS upgrade — rejects if server won't upgrade
-  family:     4,           // belt-and-suspenders IPv4 hint
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: (process.env.GMAIL_PASSWORD || "").replace(/\s/g, ""),
-  },
-  tls: {
-    rejectUnauthorized: true,  // keep security — do not disable certificate check
-  },
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
  
-// Verify on startup — appears in Railway logs within seconds of deploy
-transporter.verify((err) => {
-  if (err) {
-    console.error("EMAIL CONFIG FAILED:", err.message);
-    console.error("Check GMAIL_USER and GMAIL_PASSWORD in Railway Variables.");
-    console.error("GMAIL_PASSWORD must be 16-char App Password — no spaces.");
-  } else {
-    console.log("Email config OK — ready to send to ntalenderick@gmail.com");
-  }
-});
+// Verify Resend key on startup
+if (!process.env.RESEND_API_KEY) {
+  console.error("EMAIL CONFIG: RESEND_API_KEY is not set in Railway Variables.");
+  console.error("Go to resend.com → API Keys → create key → add to Railway Variables.");
+} else {
+  console.log("Email config OK — Resend API key found.");
+}
  
-function sendEmailAsync(mailOptions) {
-  transporter.sendMail(mailOptions)
-    .then(info => console.log("Email sent OK:", info.messageId))
-    .catch(err => {
-      console.error("Email send FAILED:", err.message, "| code:", err.code);
-      if (err.code === "EAUTH") {
-        console.error("EAUTH = wrong credentials. Fix GMAIL_PASSWORD in Railway (remove spaces).");
-      }
+async function sendEmailAsync(mailOptions) {
+  try {
+    const { data, error } = await resend.emails.send({
+      from:    "Mundi Predict & Win <onboarding@resend.dev>",
+      to:      mailOptions.to,
+      subject: mailOptions.subject,
+      text:    mailOptions.text,
     });
+    if (error) {
+      console.error("Email send FAILED:", error.message);
+    } else {
+      console.log("Email sent OK:", data.id);
+    }
+  } catch (err) {
+    console.error("Email send FAILED:", err.message);
+  }
 }
  
 // ════════════════════════════════════════
