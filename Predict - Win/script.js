@@ -1,392 +1,549 @@
-// ════════════════════════════════════════
-//  CONFIG
-// ════════════════════════════════════════
-const API = "https://my-portfolio-production-9dd4.up.railway.app";
+require("dotenv").config();
  
-let matchId        = null;
-let storageKey     = null;
-let countdownTimer = null;
+const express    = require("express");
+const cors       = require("cors");
+const rateLimit  = require("express-rate-limit");
+const nodemailer = require("nodemailer");
+const { Low }    = require("lowdb");
+const { JSONFile } = require("lowdb/node");
+const path       = require("path");
+ 
+const app = express();
  
 // ════════════════════════════════════════
-//  SHOW / HIDE SCREENS
+//  CORS
 // ════════════════════════════════════════
-function showOnly(id) {
-  const screens = [
-    "predictionForm",
-    "noMatchMsg",
-    "alreadySubmitted",
-    "closedMsg",
-    "matchEndedMsg",
-  ];
-  screens.forEach(s => {
-    const el = document.getElementById(s);
-    if (el) el.classList.toggle("hidden", s !== id);
-  });
+app.use(cors({
+  origin: [
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "https://der324.github.io",
+    "https://my-portfolio-production-9dd4.up.railway.app",
+  ],
+  methods: ["GET", "POST"],
+}));
+ 
+app.use(express.json());
+ 
+// ════════════════════════════════════════
+//  BODY GUARD MIDDLEWARE
+//  express.json() silently sets req.body to
+//  undefined when Content-Type is wrong.
+//  This catches it before sanitize() crashes.
+// ════════════════════════════════════════
+function requireBody(req, res, next) {
+  if (!req.body || typeof req.body !== "object") {
+    return res.status(400).json({ error: "Request body must be JSON." });
+  }
+  next();
 }
  
 // ════════════════════════════════════════
-//  FETCH ACTIVE MATCH
-//  Returns { match } on success,
-//  { networkError: true } on connection failure,
-//  null when no active match exists.
+//  RATE LIMITING
 // ════════════════════════════════════════
-async function getActiveMatch() {
-  try {
-    const res     = await fetch(`${API}/matches`);
-    const matches = await res.json();
+const submitLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 25,
+  message: { error: "Too many submissions from this network. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
  
-    const now = new Date();
-    const activeMatches = [];
+const statusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
  
-    for (const id in matches) {
-      const kickoff = new Date(matches[id].kickoff);
-      const end     = new Date(kickoff.getTime() + 2 * 60 * 60 * 1000);
-      if (now < end) activeMatches.push({ id, ...matches[id], kickoff });
-    }
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
  
-    if (activeMatches.length === 0) return null;
+// ════════════════════════════════════════
+//  DATABASE
+// ════════════════════════════════════════
+const dbFile  = path.join(__dirname, "submissions.json");
+const adapter = new JSONFile(dbFile);
+const db      = new Low(adapter, { submissions: {}, matches: {} });
  
-    activeMatches.sort((a, b) => a.kickoff - b.kickoff);
-    const selected = activeMatches[0];
- 
-    matchId    = selected.id;
-    storageKey = `predicted_${matchId}`;
- 
-    return selected;
- 
-  } catch (err) {
-    console.error("Failed to fetch matches:", err);
-    return { networkError: true };
-  }
+async function initDB() {
+  await db.read();
+  db.data ||= { submissions: {}, matches: {} };
+  db.data.submissions ||= {};
+  db.data.matches     ||= {};
+  await db.write();
+  console.log("Database ready.");
 }
  
 // ════════════════════════════════════════
-//  FETCH NEXT UPCOMING MATCH
+//  WRITE QUEUE
+//  Prevents concurrent write corruption.
+//  Errors are re-thrown so the calling route
+//  returns a 500 rather than silently crashing.
 // ════════════════════════════════════════
-async function getNextMatch() {
-  try {
-    const res  = await fetch(`${API}/next-match`);
-    const data = await res.json();
-    return data.found ? data : null;
-  } catch (err) {
-    console.error("Failed to fetch next match:", err);
-    return null;
-  }
+let writeQueue = Promise.resolve();
+ 
+function queueWrite(fn) {
+  writeQueue = writeQueue
+    .then(fn)
+    .catch(err => {
+      console.error("Write queue error:", err);
+      throw err;
+    });
+  return writeQueue;
 }
  
 // ════════════════════════════════════════
-//  INIT
-//  FIX: retries once after 2.5s on network
-//  error to handle Railway cold starts.
-//  FIX: distinguishes network errors from
-//  "no match" so users see the right message.
+//  EMAIL TRANSPORTER
+//
+//  ROOT CAUSE OF MISSING EMAILS:
+//  Google shows App Passwords with spaces:
+//  "rlyz ltjd mlcl jwte" — but the real
+//  password has NO spaces: "rlyzltjdmlcljwte"
+//  Railway stored it with spaces → EAUTH
+//  failure on every send, silently dropped.
+//  The .replace() below fixes this permanently
+//  regardless of how it is stored in Railway.
 // ════════════════════════════════════════
-async function init() {
-  const matchLabelEl = document.getElementById("matchLabel");
-  if (matchLabelEl) matchLabelEl.innerText = "";
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: (process.env.GMAIL_PASSWORD || "").replace(/\s/g, ""),
+  },
+});
  
-  let matchResult = await getActiveMatch();
- 
-  // Railway cold start can take ~2s — retry once on network failure
-  if (matchResult && matchResult.networkError) {
-    await new Promise(r => setTimeout(r, 2500));
-    matchResult = await getActiveMatch();
+// Verify on startup — appears in Railway logs within seconds of deploy
+transporter.verify((err) => {
+  if (err) {
+    console.error("EMAIL CONFIG FAILED:", err.message);
+    console.error("Check GMAIL_USER and GMAIL_PASSWORD in Railway Variables.");
+    console.error("GMAIL_PASSWORD must be 16-char App Password — no spaces.");
+  } else {
+    console.log("Email config OK — ready to send to ntalenderick@gmail.com");
   }
+});
  
-  // Still failing after retry — show "no match" rather than misleading message
-  if (matchResult && matchResult.networkError) {
-    showOnly("matchEndedMsg");
-    const countdown = document.getElementById("countdown");
-    if (countdown) countdown.innerText = "⚠️ Could not connect — please refresh";
-    return;
-  }
- 
-  if (!matchResult) {
-    showOnly("matchEndedMsg");
-    startPostMatchCountdown();
-    return;
-  }
- 
-  const kickoff = new Date(matchResult.kickoff);
- 
-  try {
-    const res    = await fetch(`${API}/status?matchId=${matchId}`);
-    const status = await res.json();
- 
-    if (status.ended) {
-      showOnly("matchEndedMsg");
-      startPostMatchCountdown();
-      return;
-    }
- 
-    if (!status.open) {
-      showOnly("closedMsg");
-      startPreMatchCountdown(kickoff);
-      return;
-    }
- 
-    if (localStorage.getItem(storageKey)) {
-      showOnly("alreadySubmitted");
-    } else {
-      showOnly("predictionForm");
-    }
- 
-    startPreMatchCountdown(kickoff);
- 
-  } catch (err) {
-    console.error("Status check failed:", err);
-    showOnly("matchEndedMsg");
-    startPostMatchCountdown();
-  }
-}
- 
-init();
- 
-// ════════════════════════════════════════
-//  COUNTDOWN — PHASE 1 (pre-match & in-match)
-// ════════════════════════════════════════
-function startPreMatchCountdown(kickoff) {
-  if (countdownTimer) clearTimeout(countdownTimer);
- 
-  const el       = document.getElementById("countdown");
-  const matchEnd = new Date(kickoff.getTime() + 2 * 60 * 60 * 1000);
- 
-  function update() {
-    const now = new Date();
- 
-    if (now < kickoff) {
-      const diff = kickoff - now;
-      const h    = Math.floor(diff / 3600000);
-      const m    = Math.floor((diff % 3600000) / 60000);
-      const s    = Math.floor((diff % 60000) / 1000);
-      el.innerText = `⏱ Predictions close in ${h}h ${pad(m)}m ${pad(s)}s`;
- 
-    } else if (now < matchEnd) {
-      const diff = matchEnd - now;
-      const m    = Math.floor(diff / 60000);
-      const s    = Math.floor((diff % 60000) / 1000);
-      el.innerText = `⏳ Match in progress — ends in ${m}m ${pad(s)}s`;
- 
-      const closed = document.getElementById("closedMsg");
-      if (closed && closed.classList.contains("hidden")) {
-        showOnly("closedMsg");
+function sendEmailAsync(mailOptions) {
+  transporter.sendMail(mailOptions)
+    .then(info => console.log("Email sent OK:", info.messageId))
+    .catch(err => {
+      console.error("Email send FAILED:", err.message, "| code:", err.code);
+      if (err.code === "EAUTH") {
+        console.error("EAUTH = wrong credentials. Fix GMAIL_PASSWORD in Railway (remove spaces).");
       }
- 
-    } else {
-      el.innerText = "";
-      showOnly("matchEndedMsg");
-      startPostMatchCountdown();
-      return;
-    }
- 
-    countdownTimer = setTimeout(update, 1000);
-  }
- 
-  update();
+    });
 }
  
 // ════════════════════════════════════════
-//  COUNTDOWN — PHASE 2 (post-match)
+//  BATCHED EMAIL QUEUE
+//  One summary email per 60-second window.
+//  On SIGTERM, the batch is flushed
+//  immediately so no submissions are lost.
+//
+//  Each email you receive contains:
+//    • Participant name, email, phone
+//    • Both team names they entered
+//    • Half-time and full-time predictions
+//    • Winner prediction
+//    • Submission timestamp
+//  You pick the winner from this information.
 // ════════════════════════════════════════
-async function startPostMatchCountdown() {
-  if (countdownTimer) clearTimeout(countdownTimer);
+let pendingEmailBatch = [];
+let emailFlushTimer   = null;
  
-  const el   = document.getElementById("countdown");
-  const next = await getNextMatch();
- 
-  if (!next) {
-    el.innerText = "";
-    return;
+function queueSubmissionEmail(entry, matchId) {
+  pendingEmailBatch.push({ entry, matchId });
+  if (!emailFlushTimer) {
+    emailFlushTimer = setTimeout(flushEmailBatch, 60 * 1000);
   }
+}
  
-  const nextKickoff = new Date(next.kickoff);
- 
-  function update() {
-    const now  = new Date();
-    const diff = nextKickoff - now;
- 
-    if (diff <= 0) {
-      el.innerText = "🎯 Next match starting now!";
-      setTimeout(() => location.reload(), 3000);
-      return;
-    }
- 
-    const d = Math.floor(diff / 86400000);
-    const h = Math.floor((diff % 86400000) / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
- 
-    el.innerText = d > 0
-      ? `🎯 Next match in ${d}d ${h}h ${pad(m)}m`
-      : `🎯 Next match in ${h}h ${pad(m)}m ${pad(s)}s`;
- 
-    countdownTimer = setTimeout(update, 1000);
+function flushEmailBatch() {
+  if (emailFlushTimer) {
+    clearTimeout(emailFlushTimer);
+    emailFlushTimer = null;
   }
+  if (pendingEmailBatch.length === 0) return;
  
-  update();
+  const batch = pendingEmailBatch.splice(0);
+  const count = batch.length;
+ 
+  const lines = batch.map((item, i) => {
+    const e = item.entry;
+    return [
+      `── ${i + 1}. ${e.name}  (Match: ${item.matchId}) ──`,
+      `Email     : ${e.email}`,
+      `Phone     : ${e.phone}`,
+      `Match     : ${e.teamA} vs ${e.teamB}`,
+      `Half-time : ${e.fhLeader} leads  |  Goals: ${e.fhGoals}`,
+      `Full-time : ${e.shLeader} leads  |  Goals: ${e.shGoals}`,
+      `Winner    : ${e.winner}`,
+      `Submitted : ${new Date(e.submittedAt).toLocaleString("en-RW", { timeZone: "Africa/Kigali" })} (Kigali)`,
+    ].join("\n");
+  }).join("\n\n");
+ 
+  sendEmailAsync({
+    from:    process.env.GMAIL_USER,
+    to:      "ntalenderick@gmail.com",
+    subject: `⚽ ${count} New Prediction${count > 1 ? "s" : ""} — Mundi Predict & Win`,
+    text:
+      `${count} new submission${count > 1 ? "s" : ""} received:\n\n` +
+      `${lines}\n\n` +
+      `────────────────────────────────────\n` +
+      `View all submissions + reset in admin.html\n`,
+  });
 }
  
 // ════════════════════════════════════════
 //  HELPERS
 // ════════════════════════════════════════
-function pad(n) { return String(n).padStart(2, "0"); }
+ 
+// Call db.read() before using this
+function getAllMatches() {
+  return { ...db.data.matches };
+}
+ 
+const sanitize = (str) =>
+  String(str || "")
+    .replace(/[<>"']/g, "")
+    .trim()
+    .slice(0, 100);
+ 
+function getMatchEnd(kickoff) {
+  return new Date(new Date(kickoff).getTime() + 2 * 60 * 60 * 1000);
+}
  
 // ════════════════════════════════════════
-//  NUMBER STEPPER
+//  GET /matches  (public)
 // ════════════════════════════════════════
-document.querySelectorAll(".num-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const input = document.getElementById(btn.dataset.target);
-    if (!input) return;
+app.get("/matches", statusLimiter, async (req, res) => {
+  await db.read();
+  const matches = getAllMatches();
+  const now = new Date();
  
-    let val = parseInt(input.value) || 0;
-    if (btn.dataset.action === "inc" && val < 20) val++;
-    if (btn.dataset.action === "dec" && val > 0)  val--;
+  const publicMatches = {};
+  for (const id in matches) {
+    const kickoff  = new Date(matches[id].kickoff);
+    const matchEnd = getMatchEnd(kickoff);
+    if (now < matchEnd) {
+      publicMatches[id] = { kickoff: matches[id].kickoff };
+    }
+  }
  
-    input.value = val;
-    input.dispatchEvent(new Event("input"));
+  res.json(publicMatches);
+});
+ 
+// ════════════════════════════════════════
+//  GET /next-match  (public)
+// ════════════════════════════════════════
+app.get("/next-match", statusLimiter, async (req, res) => {
+  await db.read();
+  const matches = getAllMatches();
+  const now = new Date();
+ 
+  const upcoming = [];
+  for (const id in matches) {
+    const kickoff = new Date(matches[id].kickoff);
+    if (kickoff > now) upcoming.push({ id, kickoff });
+  }
+ 
+  if (upcoming.length === 0) return res.json({ found: false });
+ 
+  upcoming.sort((a, b) => a.kickoff - b.kickoff);
+  const next = upcoming[0];
+ 
+  res.json({
+    found:   true,
+    kickoff: next.kickoff.toISOString(),
+    matchId: next.id,
   });
 });
  
 // ════════════════════════════════════════
-//  LIVE TEAM LABELS
+//  GET /status?matchId=...
 // ════════════════════════════════════════
-document.getElementById("teamA").addEventListener("input", function () {
-  const name = this.value.trim() || "Home Team";
-  document.getElementById("fhHomeLabel").innerText     = name;
-  document.getElementById("shHomeLabel").innerText     = name;
-  document.getElementById("winnerHomeLabel").innerText = name;
+app.get("/status", statusLimiter, async (req, res) => {
+  const { matchId } = req.query;
+  await db.read();
+  const matches = getAllMatches();
+ 
+  if (!matchId || !matches[matchId]) {
+    return res.status(404).json({ error: "Match not found." });
+  }
+ 
+  const match    = matches[matchId];
+  const now      = new Date();
+  const kickoff  = new Date(match.kickoff);
+  const matchEnd = getMatchEnd(kickoff);
+  const open     = now < kickoff;
+  const ended    = now >= matchEnd;
+  const count    = (db.data.submissions[matchId] || []).length;
+ 
+  res.json({ open, ended, kickoff: match.kickoff, matchEnd: matchEnd.toISOString(), total: count });
 });
  
-document.getElementById("teamB").addEventListener("input", function () {
-  const name = this.value.trim() || "Away Team";
-  document.getElementById("fhAwayLabel").innerText     = name;
-  document.getElementById("shAwayLabel").innerText     = name;
-  document.getElementById("winnerAwayLabel").innerText = name;
-});
- 
 // ════════════════════════════════════════
-//  RESOLVE TEAM
+//  POST /submit
 // ════════════════════════════════════════
-function resolveTeam(value, teamA, teamB) {
-  if (value === "home") return teamA;
-  if (value === "away") return teamB;
-  return "Draw";
-}
+app.post("/submit", submitLimiter, requireBody, async (req, res) => {
+  const now  = new Date();
+  const data = req.body;
  
-// ════════════════════════════════════════
-//  VALIDATION
-// ════════════════════════════════════════
-function showError(fieldId, message) {
-  const input = document.getElementById(fieldId);
-  const error = document.getElementById(`${fieldId}-error`);
-  if (input) input.classList.add("is-error");
-  if (error) error.innerText = message;
-}
+  // FIX: fresh db.read() here so we never validate against stale match data
+  await db.read();
+  const matches = getAllMatches();
+  const match   = matches[data.matchId];
  
-function clearError(fieldId) {
-  const input = document.getElementById(fieldId);
-  const error = document.getElementById(`${fieldId}-error`);
-  if (input) input.classList.remove("is-error");
-  if (error) error.innerText = "";
-}
+  if (!match) {
+    return res.status(404).json({ error: "Invalid match." });
+  }
  
-function clearAllErrors() {
-  ["name", "email", "phone", "teamA", "teamB", "fhGoals", "shGoals"].forEach(clearError);
-  ["fhLeader-error", "shLeader-error", "winner-error"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.innerText = "";
-  });
-}
+  if (now >= new Date(match.kickoff)) {
+    return res.status(403).json({ error: "Predictions are closed. The match has started." });
+  }
  
-function validateForm(d) {
-  let valid = true;
-  clearAllErrors();
+  const clean = {
+    name:     sanitize(data.name),
+    email:    sanitize(data.email).toLowerCase(),
+    phone:    sanitize(data.phone),
+    teamA:    sanitize(data.teamA),
+    teamB:    sanitize(data.teamB),
+    fhLeader: sanitize(data.fhLeader),
+    fhGoals:  parseInt(data.fhGoals),
+    shLeader: sanitize(data.shLeader),
+    shGoals:  parseInt(data.shGoals),
+    winner:   sanitize(data.winner),
+  };
  
-  if (!d.name.trim())  { showError("name",  "Enter your name");  valid = false; }
+  const requiredText = ["name", "email", "phone", "teamA", "teamB", "fhLeader", "shLeader", "winner"];
+  for (const field of requiredText) {
+    if (!clean[field]) return res.status(400).json({ error: `Missing field: ${field}` });
+  }
  
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(d.email)) { showError("email", "Invalid email"); valid = false; }
+  if (!emailRegex.test(clean.email)) {
+    return res.status(400).json({ error: "Invalid email address." });
+  }
  
-  if (!d.phone.trim()) { showError("phone", "Enter phone");       valid = false; }
-  if (!d.teamA.trim()) { showError("teamA", "Enter home team");   valid = false; }
-  if (!d.teamB.trim()) { showError("teamB", "Enter away team");   valid = false; }
+  if (
+    isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
+    clean.fhGoals < 0   || clean.shGoals < 0     ||
+    clean.fhGoals > 20  || clean.shGoals > 20
+  ) {
+    return res.status(400).json({ error: "Invalid goal values (must be 0–20)." });
+  }
  
-  if (!d.fhLeaderRaw) { document.getElementById("fhLeader-error").innerText = "Required"; valid = false; }
-  if (!d.shLeaderRaw) { document.getElementById("shLeader-error").innerText = "Required"; valid = false; }
-  if (!d.winnerRaw)   { document.getElementById("winner-error").innerText   = "Required"; valid = false; }
+  let result = null;
  
-  return valid;
-}
+  try {
+    await queueWrite(async () => {
+      await db.read();
+      db.data.submissions[data.matchId] ||= [];
  
-// ════════════════════════════════════════
-//  SUBMIT
-// ════════════════════════════════════════
-document.getElementById("predictionForm")
-  .addEventListener("submit", async (e) => {
-    e.preventDefault();
+      const alreadySubmitted = db.data.submissions[data.matchId]
+        .some(entry => entry.email === clean.email);
  
-    const btn = document.getElementById("submitBtn");
-    const msg = document.getElementById("msg");
- 
-    const teamA = document.getElementById("teamA").value.trim();
-    const teamB = document.getElementById("teamB").value.trim();
- 
-    const fhLeaderRaw = document.querySelector('input[name="fhLeader"]:checked')?.value;
-    const shLeaderRaw = document.querySelector('input[name="shLeader"]:checked')?.value;
-    const winnerRaw   = document.querySelector('input[name="winner"]:checked')?.value;
- 
-    const raw = {
-      name:       document.getElementById("name").value,
-      email:      document.getElementById("email").value,
-      phone:      document.getElementById("phone").value,
-      teamA, teamB, fhLeaderRaw, shLeaderRaw, winnerRaw,
-      fhGoals:    document.getElementById("fhGoals").value,
-      shGoals:    document.getElementById("shGoals").value,
-    };
- 
-    if (!validateForm(raw)) return;
- 
-    const payload = {
-      matchId,
-      name:     raw.name.trim(),
-      email:    raw.email.trim(),
-      phone:    raw.phone.trim(),
-      teamA, teamB,
-      fhLeader: resolveTeam(fhLeaderRaw, teamA, teamB),
-      fhGoals:  raw.fhGoals,
-      shLeader: resolveTeam(shLeaderRaw, teamA, teamB),
-      shGoals:  raw.shGoals,
-      winner:   resolveTeam(winnerRaw, teamA, teamB),
-    };
- 
-    btn.disabled = true;
-    btn.querySelector(".submit-btn__text").innerText = "Submitting…";
-    msg.innerText = "";
-    msg.className = "form-msg";
- 
-    try {
-      const res = await fetch(`${API}/submit`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload),
-      });
- 
-      if (res.ok) {
-        localStorage.setItem(storageKey, "true");
-        showOnly("alreadySubmitted");
-      } else {
-        const body = await res.json().catch(() => ({}));
-        msg.innerText = body.error || "Submission failed. Please try again.";
-        msg.className = "form-msg error";
-        btn.disabled  = false;
-        btn.querySelector(".submit-btn__text").innerText = "Submit My Prediction";
+      if (alreadySubmitted) {
+        result = { code: 409, body: { error: "You have already submitted a prediction for this match." } };
+        return;
       }
  
-    } catch {
-      msg.innerText = "Network error — please check your connection and try again.";
-      msg.className = "form-msg error";
-      btn.disabled  = false;
-      btn.querySelector(".submit-btn__text").innerText = "Submit My Prediction";
-    }
-  });
+      const record = { ...clean, submittedAt: now.toISOString() };
+      db.data.submissions[data.matchId].push(record);
+      await db.write();
+      result = { code: 200, body: { status: "success" }, record };
+    });
+  } catch (err) {
+    console.error("Submit write failed:", err);
+    return res.status(500).json({ error: "Server error saving your prediction. Please try again." });
+  }
+ 
+  if (!result || result.code !== 200) {
+    return res.status(result ? result.code : 500).json(
+      result ? result.body : { error: "Unexpected server error." }
+    );
+  }
+ 
+  res.json(result.body);
+  queueSubmissionEmail(result.record, data.matchId);
+});
+ 
+// ════════════════════════════════════════
+//  POST /admin/match
+// ════════════════════════════════════════
+app.post("/admin/match", adminLimiter, requireBody, async (req, res) => {
+  const { secret, matchId, label, kickoff } = req.body;
+ 
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Unauthorized." });
+  }
+ 
+  if (!matchId || !label || !kickoff) {
+    return res.status(400).json({ error: "matchId, label, and kickoff are all required." });
+  }
+ 
+  // FIX: explicit length check before sanitize silently truncates matchId
+  if (String(matchId).length > 80) {
+    return res.status(400).json({ error: "matchId must be 80 characters or fewer." });
+  }
+ 
+  if (isNaN(new Date(kickoff).getTime())) {
+    return res.status(400).json({ error: "Invalid kickoff date format." });
+  }
+ 
+  try {
+    await queueWrite(async () => {
+      await db.read();
+      db.data.matches[sanitize(matchId)] = {
+        label:   sanitize(label),
+        kickoff: new Date(kickoff).toISOString(),
+      };
+      await db.write();
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Server error saving match. Please try again." });
+  }
+ 
+  res.json({ status: "Match added", matchId, label, kickoff });
+});
+ 
+// ════════════════════════════════════════
+//  GET /admin/matches
+// ════════════════════════════════════════
+app.get("/admin/matches", adminLimiter, async (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Unauthorized." });
+  }
+  await db.read();
+  res.json(getAllMatches());
+});
+ 
+// ════════════════════════════════════════
+//  GET /admin/submissions
+// ════════════════════════════════════════
+app.get("/admin/submissions", adminLimiter, async (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Unauthorized." });
+  }
+  await db.read();
+  res.json(db.data.submissions);
+});
+ 
+// ════════════════════════════════════════
+//  POST /admin/reset
+// ════════════════════════════════════════
+app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
+  const { secret, matchId } = req.body;
+ 
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Unauthorized." });
+  }
+ 
+  if (!matchId) {
+    return res.status(400).json({ error: "matchId is required." });
+  }
+ 
+  try {
+    await queueWrite(async () => {
+      await db.read();
+      db.data.submissions[matchId] = [];
+      await db.write();
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Server error during reset. Please try again." });
+  }
+ 
+  res.json({ status: "Reset complete", matchId });
+});
+ 
+// ════════════════════════════════════════
+//  GET /admin/test-email
+//  Sends a real test email to ntalenderick@gmail.com
+//  so you can confirm Gmail credentials work.
+//
+//  Usage — paste this in your browser
+//  (replace YOUR_ADMIN_SECRET with your ADMIN_SECRET
+//  from Railway Variables, NOT the Gmail password):
+//
+//  https://my-portfolio-production-9dd4.up.railway.app
+//    /admin/test-email?secret=YOUR_ADMIN_SECRET
+// ════════════════════════════════════════
+app.get("/admin/test-email", adminLimiter, async (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({
+      error: "Unauthorized.",
+      hint:  "?secret= must be your ADMIN_SECRET from Railway Variables, not the Gmail password.",
+    });
+  }
+ 
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = (process.env.GMAIL_PASSWORD || "").replace(/\s/g, "");
+ 
+  if (!gmailUser || !gmailPass) {
+    return res.status(500).json({
+      error: "GMAIL_USER or GMAIL_PASSWORD is missing from Railway Variables.",
+    });
+  }
+ 
+  try {
+    const info = await transporter.sendMail({
+      from:    gmailUser,
+      to:      "ntalenderick@gmail.com",
+      subject: "Mundi Predict & Win — Email Test",
+      text:
+        "This is a test email from your Mundi Predict & Win server.\n\n" +
+        "If you received this, your Gmail credentials are working correctly.\n\n" +
+        "Sent from: " + gmailUser + "\n" +
+        "Time: " + new Date().toUTCString(),
+    });
+ 
+    console.log("Test email sent OK:", info.messageId);
+    res.json({
+      status:    "Email sent successfully",
+      to:        "ntalenderick@gmail.com",
+      messageId: info.messageId,
+      note:      "Check your inbox and spam folder.",
+    });
+ 
+  } catch (err) {
+    console.error("Test email failed:", err.message, "| code:", err.code);
+    res.status(500).json({
+      error:  "Email send failed: " + err.message,
+      code:   err.code,
+      fix:    err.code === "EAUTH"
+        ? "Wrong Gmail credentials. Make sure GMAIL_PASSWORD in Railway has no spaces."
+        : "Check Railway logs for more detail.",
+    });
+  }
+});
+ 
+// ════════════════════════════════════════
+//  GRACEFUL SHUTDOWN
+//  Flush pending email batch before Railway
+//  restarts the server so nothing is lost.
+// ════════════════════════════════════════
+process.on("SIGTERM", () => {
+  console.log("SIGTERM — flushing email batch...");
+  flushEmailBatch();
+  setTimeout(() => process.exit(0), 2000);
+});
+ 
+// ════════════════════════════════════════
+//  GLOBAL ERROR HANDLERS
+// ════════════════════════════════════════
+process.on("uncaughtException",  (err) => console.error("Uncaught exception:", err));
+process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
+ 
+// ════════════════════════════════════════
+//  START
+// ════════════════════════════════════════
+const PORT = process.env.PORT || 3000;
+ 
+initDB().then(() => {
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+});
