@@ -138,7 +138,7 @@ async function sendEmailAsync(mailOptions) {
   try {
     const { data, error } = await resend.emails.send({
       from:    "Mundi Predict & Win <onboarding@resend.dev>",
-      to:      mailOptions.to,
+      to:      process.env.GMAIL_USER,
       subject: mailOptions.subject,
       text:    mailOptions.text,
     });
