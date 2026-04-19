@@ -1,31 +1,27 @@
 // ════════════════════════════════════════
 //  FORCE IPv4 — must be the very first lines.
-//  Railway cannot reach IPv6. family:4 in
-//  createTransport is ignored by newer
-//  nodemailer versions. This fixes DNS
-//  globally before any connection is made.
+//  Railway cannot reach IPv6 reliably.
 // ════════════════════════════════════════
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
  
 require("dotenv").config();
  
-const express    = require("express");
-const cors       = require("cors");
-const rateLimit  = require("express-rate-limit");
-const { Resend } = require("resend");
-const { Low }    = require("lowdb");
+const express      = require("express");
+const cors         = require("cors");
+const rateLimit    = require("express-rate-limit");
+const nodemailer   = require("nodemailer");
+const { Low }      = require("lowdb");
 const { JSONFile } = require("lowdb/node");
-const path       = require("path");
+const path         = require("path");
  
 const app = express();
  
 // ════════════════════════════════════════
 //  TRUST PROXY
-//  Railway sits behind a load balancer that
-//  sets X-Forwarded-For. Without this, rate
-//  limiting misidentifies every user as the
-//  same IP and blocks them all together.
+//  Railway sits behind a load balancer.
+//  Without this, rate limiting misidentifies
+//  every user as the same IP.
 // ════════════════════════════════════════
 app.set("trust proxy", 1);
  
@@ -45,10 +41,9 @@ app.use(cors({
 app.use(express.json());
  
 // ════════════════════════════════════════
-//  BODY GUARD MIDDLEWARE
-//  express.json() silently sets req.body to
-//  undefined when Content-Type is wrong.
-//  This catches it before sanitize() crashes.
+//  BODY GUARD
+//  Catches missing/malformed JSON bodies
+//  before they reach route handlers.
 // ════════════════════════════════════════
 function requireBody(req, res, next) {
   if (!req.body || typeof req.body !== "object") {
@@ -83,7 +78,7 @@ const adminLimiter = rateLimit({
 });
  
 // ════════════════════════════════════════
-//  DATABASE
+//  DATABASE  (submissions.json — in .gitignore)
 // ════════════════════════════════════════
 const dbFile  = path.join(__dirname, "submissions.json");
 const adapter = new JSONFile(dbFile);
@@ -91,7 +86,7 @@ const db      = new Low(adapter, { submissions: {}, matches: {} });
  
 async function initDB() {
   await db.read();
-  db.data ||= { submissions: {}, matches: {} };
+  db.data             ||= {};
   db.data.submissions ||= {};
   db.data.matches     ||= {};
   await db.write();
@@ -101,8 +96,6 @@ async function initDB() {
 // ════════════════════════════════════════
 //  WRITE QUEUE
 //  Prevents concurrent write corruption.
-//  Errors are re-thrown so the calling route
-//  returns a 500 rather than silently crashing.
 // ════════════════════════════════════════
 let writeQueue = Promise.resolve();
  
@@ -117,134 +110,171 @@ function queueWrite(fn) {
 }
  
 // ════════════════════════════════════════
-//  EMAIL — RESEND API (HTTP, not SMTP)
-//  Railway blocks all SMTP ports (25/465/587).
-//  Resend uses HTTPS (port 443) which Railway
-//  never blocks. Free tier: 3,000 emails/month.
-//  Setup: resend.com → API Keys → add RESEND_API_KEY
-//  to Railway Variables.
-// ════════════════════════════════════════
-const resend = new Resend(process.env.RESEND_API_KEY);
- 
-// Verify Resend key on startup
-if (!process.env.RESEND_API_KEY) {
-  console.error("EMAIL CONFIG: RESEND_API_KEY is not set in Railway Variables.");
-  console.error("Go to resend.com → API Keys → create key → add to Railway Variables.");
-} else {
-  console.log("Email config OK — Resend API key found.");
-}
- 
-async function sendEmailAsync(mailOptions) {
-  try {
-    const { data, error } = await resend.emails.send({
-      from:    "Mundi Predict & Win <onboarding@resend.dev>",
-      to:      process.env.GMAIL_USER,
-      subject: mailOptions.subject,
-      text:    mailOptions.text,
-    });
-    if (error) {
-      console.error("Email send FAILED:", error.message);
-    } else {
-      console.log("Email sent OK:", data.id);
-    }
-  } catch (err) {
-    console.error("Email send FAILED:", err.message);
-  }
-}
- 
-// ════════════════════════════════════════
-//  BATCHED EMAIL QUEUE
-//  One summary email per 60-second window.
-//  On SIGTERM, the batch is flushed
-//  immediately so no submissions are lost.
+//  EMAIL — NODEMAILER + GMAIL
 //
-//  Each email you receive contains:
-//    • Participant name, email, phone
-//    • Both team names they entered
-//    • Half-time and full-time predictions
-//    • Winner prediction
-//    • Submission timestamp
-//  You pick the winner from this information.
+//  FIX: Resend was used before but emails
+//  were not arriving at ntalenderick@gmail.com
+//  because onboarding@resend.dev can only
+//  deliver to the Resend account owner's email.
+//
+//  Nodemailer + Gmail app password works
+//  reliably and is already proven to work
+//  in this project.
+//
+//  Required Railway Variables:
+//    GMAIL_USER     = ntalenderick@gmail.com
+//    GMAIL_PASSWORD = your 16-char app password (no spaces)
+//
+//  How to get/verify app password:
+//    1. Go to myaccount.google.com/security
+//    2. Enable 2-Step Verification if not already on
+//    3. Search "App passwords"
+//    4. Create one named "Mundi Railway"
+//    5. Copy the 16 chars (remove spaces) into Railway Variables
 // ════════════════════════════════════════
-let pendingEmailBatch = [];
-let emailFlushTimer   = null;
+let transporter = null;
  
-function queueSubmissionEmail(entry, matchId) {
-  pendingEmailBatch.push({ entry, matchId });
-  if (!emailFlushTimer) {
-    emailFlushTimer = setTimeout(flushEmailBatch, 60 * 1000);
+function createTransporter() {
+  const user = process.env.GMAIL_USER;
+  const pass = (process.env.GMAIL_PASSWORD || "").replace(/\s/g, "");
+ 
+  if (!user || !pass) {
+    console.error("EMAIL CONFIG ERROR: GMAIL_USER or GMAIL_PASSWORD missing from Railway Variables.");
+    return null;
+  }
+ 
+  return nodemailer.createTransport({
+    host:   "smtp.gmail.com",
+    port:   465,
+    secure: true,          // SSL — avoids Railway blocking port 587
+    auth:   { user, pass },
+    tls: {
+      rejectUnauthorized: true,
+    },
+  });
+}
+ 
+// ════════════════════════════════════════
+//  SEND EMAIL (fire-and-forget)
+//  Prediction is always saved first.
+//  Email failure never blocks the response.
+// ════════════════════════════════════════
+async function sendEmail(to, subject, text) {
+  if (!transporter) {
+    console.error("Email skipped — transporter not initialised (check Railway Variables).");
+    return;
+  }
+ 
+  try {
+    const info = await transporter.sendMail({
+      from:    `"Mundi Predict & Win" <${process.env.GMAIL_USER}>`,
+      to,
+      subject,
+      text,
+    });
+    console.log("Email sent OK:", info.messageId);
+  } catch (err) {
+    console.error("Email FAILED:", err.message, "| code:", err.code);
   }
 }
  
-function flushEmailBatch() {
-  if (emailFlushTimer) {
-    clearTimeout(emailFlushTimer);
-    emailFlushTimer = null;
-  }
-  if (pendingEmailBatch.length === 0) return;
+// ════════════════════════════════════════
+//  EMAIL BATCH QUEUE
+//  Groups submissions within a 60-second
+//  window into one email so your inbox
+//  doesn't get flooded during busy periods.
+//  On SIGTERM the batch flushes immediately.
+// ════════════════════════════════════════
+let pendingBatch   = [];
+let batchTimer     = null;
  
-  const batch = pendingEmailBatch.splice(0);
+function queueEmail(entry, matchId) {
+  pendingBatch.push({ entry, matchId });
+  if (!batchTimer) {
+    batchTimer = setTimeout(flushBatch, 60 * 1000);
+  }
+}
+ 
+function flushBatch() {
+  if (batchTimer) { clearTimeout(batchTimer); batchTimer = null; }
+  if (pendingBatch.length === 0) return;
+ 
+  const batch = pendingBatch.splice(0);
   const count = batch.length;
  
   const lines = batch.map((item, i) => {
     const e = item.entry;
     return [
-      `── ${i + 1}. ${e.name}  (Match: ${item.matchId}) ──`,
-      `Email     : ${e.email}`,
-      `Phone     : ${e.phone}`,
-      `Match     : ${e.teamA} vs ${e.teamB}`,
-      `Half-time : ${e.fhLeader} leads  |  Goals: ${e.fhGoals}`,
-      `Full-time : ${e.shLeader} leads  |  Goals: ${e.shGoals}`,
-      `Winner    : ${e.winner}`,
-      `Submitted : ${new Date(e.submittedAt).toLocaleString("en-RW", { timeZone: "Africa/Kigali" })} (Kigali)`,
+      `─────────────────────────────────────`,
+      `  ${i + 1}. ${e.name}`,
+      `─────────────────────────────────────`,
+      `  Match ID  : ${item.matchId}`,
+      `  Email     : ${e.email}`,
+      `  Phone     : ${e.phone}`,
+      ``,
+      `  Match     : ${e.teamA}  vs  ${e.teamB}`,
+      ``,
+      `  ┌── FIRST HALF PREDICTION ──────────`,
+      `  │  Leading at half time : ${e.fhLeader}`,
+      `  │  Goals in first half  : ${e.fhGoals}`,
+      `  └───────────────────────────────────`,
+      ``,
+      `  ┌── SECOND HALF PREDICTION ─────────`,
+      `  │  Leading at full time  : ${e.shLeader}`,
+      `  │  Goals in second half  : ${e.shGoals}`,
+      `  └───────────────────────────────────`,
+      ``,
+      `  ┌── FINAL RESULT ────────────────────`,
+      `  │  Match winner : ${e.winner}`,
+      `  └───────────────────────────────────`,
+      ``,
+      `  Submitted : ${new Date(e.submittedAt).toLocaleString("en-RW", {
+        timeZone: "Africa/Kigali"
+      })} (Kigali time)`,
     ].join("\n");
   }).join("\n\n");
  
-  sendEmailAsync({
-    from:    process.env.GMAIL_USER,
-    to:      "ntalenderick@gmail.com",
-    subject: `⚽ ${count} New Prediction${count > 1 ? "s" : ""} — Mundi Predict & Win`,
-    text:
-      `${count} new submission${count > 1 ? "s" : ""} received:\n\n` +
-      `${lines}\n\n` +
-      `────────────────────────────────────\n` +
-      `View all submissions + reset in admin.html\n`,
-  });
+  sendEmail(
+    "ntalenderick@gmail.com",
+    `⚽ ${count} New Prediction${count > 1 ? "s" : ""} — Mundi Predict & Win`,
+    `${count} new prediction${count > 1 ? "s" : ""} received:\n\n` +
+    `${lines}\n\n` +
+    `─────────────────────────────────────\n` +
+    `View all submissions in your admin panel.\n`
+  );
 }
  
 // ════════════════════════════════════════
 //  HELPERS
 // ════════════════════════════════════════
- 
-// Call db.read() before using this
 function getAllMatches() {
   return { ...db.data.matches };
 }
  
 const sanitize = (str) =>
-  String(str || "")
-    .replace(/[<>"']/g, "")
-    .trim()
-    .slice(0, 100);
+  String(str || "").replace(/[<>"']/g, "").trim().slice(0, 100);
  
 function getMatchEnd(kickoff) {
   return new Date(new Date(kickoff).getTime() + 2 * 60 * 60 * 1000);
 }
  
 // ════════════════════════════════════════
-//  GET /matches  (public)
+//  GET /matches  (public — used by script.js)
 // ════════════════════════════════════════
 app.get("/matches", statusLimiter, async (req, res) => {
   await db.read();
   const matches = getAllMatches();
-  const now = new Date();
+  const now     = new Date();
  
   const publicMatches = {};
   for (const id in matches) {
     const kickoff  = new Date(matches[id].kickoff);
     const matchEnd = getMatchEnd(kickoff);
     if (now < matchEnd) {
-      publicMatches[id] = { kickoff: matches[id].kickoff };
+      publicMatches[id] = {
+        kickoff: matches[id].kickoff,
+        label:   matches[id].label,
+      };
     }
   }
  
@@ -256,13 +286,13 @@ app.get("/matches", statusLimiter, async (req, res) => {
 // ════════════════════════════════════════
 app.get("/next-match", statusLimiter, async (req, res) => {
   await db.read();
-  const matches = getAllMatches();
-  const now = new Date();
- 
+  const matches  = getAllMatches();
+  const now      = new Date();
   const upcoming = [];
+ 
   for (const id in matches) {
     const kickoff = new Date(matches[id].kickoff);
-    if (kickoff > now) upcoming.push({ id, kickoff });
+    if (kickoff > now) upcoming.push({ id, kickoff, label: matches[id].label });
   }
  
   if (upcoming.length === 0) return res.json({ found: false });
@@ -274,6 +304,7 @@ app.get("/next-match", statusLimiter, async (req, res) => {
     found:   true,
     kickoff: next.kickoff.toISOString(),
     matchId: next.id,
+    label:   next.label,
   });
 });
  
@@ -297,7 +328,13 @@ app.get("/status", statusLimiter, async (req, res) => {
   const ended    = now >= matchEnd;
   const count    = (db.data.submissions[matchId] || []).length;
  
-  res.json({ open, ended, kickoff: match.kickoff, matchEnd: matchEnd.toISOString(), total: count });
+  res.json({
+    open,
+    ended,
+    kickoff:  match.kickoff,
+    matchEnd: matchEnd.toISOString(),
+    total:    count,
+  });
 });
  
 // ════════════════════════════════════════
@@ -307,7 +344,6 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
   const now  = new Date();
   const data = req.body;
  
-  // FIX: fresh db.read() here so we never validate against stale match data
   await db.read();
   const matches = getAllMatches();
   const match   = matches[data.matchId];
@@ -317,9 +353,12 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
   }
  
   if (now >= new Date(match.kickoff)) {
-    return res.status(403).json({ error: "Predictions are closed. The match has started." });
+    return res.status(403).json({
+      error: "Predictions are closed. The match has started.",
+    });
   }
  
+  // Sanitize
   const clean = {
     name:     sanitize(data.name),
     email:    sanitize(data.email).toLowerCase(),
@@ -333,16 +372,24 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     winner:   sanitize(data.winner),
   };
  
-  const requiredText = ["name", "email", "phone", "teamA", "teamB", "fhLeader", "shLeader", "winner"];
+  // Validate required text fields
+  const requiredText = [
+    "name", "email", "phone", "teamA", "teamB",
+    "fhLeader", "shLeader", "winner",
+  ];
   for (const field of requiredText) {
-    if (!clean[field]) return res.status(400).json({ error: `Missing field: ${field}` });
+    if (!clean[field]) {
+      return res.status(400).json({ error: `Missing field: ${field}` });
+    }
   }
  
+  // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(clean.email)) {
     return res.status(400).json({ error: "Invalid email address." });
   }
  
+  // Validate goals
   if (
     isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
     clean.fhGoals < 0   || clean.shGoals < 0     ||
@@ -362,7 +409,10 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
         .some(entry => entry.email === clean.email);
  
       if (alreadySubmitted) {
-        result = { code: 409, body: { error: "You have already submitted a prediction for this match." } };
+        result = {
+          code: 409,
+          body: { error: "You have already submitted a prediction for this match." },
+        };
         return;
       }
  
@@ -373,17 +423,20 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     });
   } catch (err) {
     console.error("Submit write failed:", err);
-    return res.status(500).json({ error: "Server error saving your prediction. Please try again." });
+    return res.status(500).json({
+      error: "Server error saving your prediction. Please try again.",
+    });
   }
  
   if (!result || result.code !== 200) {
-    return res.status(result ? result.code : 500).json(
-      result ? result.body : { error: "Unexpected server error." }
-    );
+    return res
+      .status(result ? result.code : 500)
+      .json(result ? result.body : { error: "Unexpected server error." });
   }
  
+  // Respond immediately — email is fire-and-forget
   res.json(result.body);
-  queueSubmissionEmail(result.record, data.matchId);
+  queueEmail(result.record, data.matchId);
 });
  
 // ════════════════════════════════════════
@@ -397,10 +450,11 @@ app.post("/admin/match", adminLimiter, requireBody, async (req, res) => {
   }
  
   if (!matchId || !label || !kickoff) {
-    return res.status(400).json({ error: "matchId, label, and kickoff are all required." });
+    return res.status(400).json({
+      error: "matchId, label, and kickoff are all required.",
+    });
   }
  
-  // FIX: explicit length check before sanitize silently truncates matchId
   if (String(matchId).length > 80) {
     return res.status(400).json({ error: "matchId must be 80 characters or fewer." });
   }
@@ -419,7 +473,7 @@ app.post("/admin/match", adminLimiter, requireBody, async (req, res) => {
       await db.write();
     });
   } catch (err) {
-    return res.status(500).json({ error: "Server error saving match. Please try again." });
+    return res.status(500).json({ error: "Server error saving match." });
   }
  
   res.json({ status: "Match added", matchId, label, kickoff });
@@ -468,7 +522,7 @@ app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
       await db.write();
     });
   } catch (err) {
-    return res.status(500).json({ error: "Server error during reset. Please try again." });
+    return res.status(500).json({ error: "Server error during reset." });
   }
  
   res.json({ status: "Reset complete", matchId });
@@ -476,48 +530,39 @@ app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
  
 // ════════════════════════════════════════
 //  GET /admin/test-email
-//  Sends a real test email to ntalenderick@gmail.com
-//  so you can confirm Gmail credentials work.
+//  Sends a real test email so you can
+//  confirm Gmail credentials are working.
 //
-//  Usage — paste this in your browser
-//  (replace YOUR_ADMIN_SECRET with your ADMIN_SECRET
-//  from Railway Variables, NOT the Gmail password):
-//
+//  Open this URL in your browser:
 //  https://my-portfolio-production-9dd4.up.railway.app
 //    /admin/test-email?secret=YOUR_ADMIN_SECRET
 // ════════════════════════════════════════
 app.get("/admin/test-email", adminLimiter, async (req, res) => {
   if (req.query.secret !== process.env.ADMIN_SECRET) {
-    return res.status(403).json({
-      error: "Unauthorized.",
-      hint:  "?secret= must be your ADMIN_SECRET from Railway Variables, not the Gmail password.",
-    });
+    return res.status(403).json({ error: "Unauthorized." });
   }
  
-  const gmailUser = process.env.GMAIL_USER;
-  const gmailPass = (process.env.GMAIL_PASSWORD || "").replace(/\s/g, "");
- 
-  if (!gmailUser || !gmailPass) {
+  if (!transporter) {
     return res.status(500).json({
-      error: "GMAIL_USER or GMAIL_PASSWORD is missing from Railway Variables.",
+      error: "Email transporter not initialised. Check GMAIL_USER and GMAIL_PASSWORD in Railway Variables.",
     });
   }
  
   try {
     const info = await transporter.sendMail({
-      from:    gmailUser,
+      from:    `"Mundi Predict & Win" <${process.env.GMAIL_USER}>`,
       to:      "ntalenderick@gmail.com",
-      subject: "Mundi Predict & Win — Email Test",
+      subject: "✅ Mundi Email Test — Working!",
       text:
         "This is a test email from your Mundi Predict & Win server.\n\n" +
         "If you received this, your Gmail credentials are working correctly.\n\n" +
-        "Sent from: " + gmailUser + "\n" +
-        "Time: " + new Date().toUTCString(),
+        "Sent from : " + process.env.GMAIL_USER + "\n" +
+        "Time      : " + new Date().toUTCString(),
     });
  
     console.log("Test email sent OK:", info.messageId);
     res.json({
-      status:    "Email sent successfully",
+      status:    "Email sent successfully ✅",
       to:        "ntalenderick@gmail.com",
       messageId: info.messageId,
       note:      "Check your inbox and spam folder.",
@@ -526,11 +571,11 @@ app.get("/admin/test-email", adminLimiter, async (req, res) => {
   } catch (err) {
     console.error("Test email failed:", err.message, "| code:", err.code);
     res.status(500).json({
-      error:  "Email send failed: " + err.message,
-      code:   err.code,
-      fix:    err.code === "EAUTH"
-        ? "Wrong Gmail credentials. Make sure GMAIL_PASSWORD in Railway has no spaces."
-        : "Check Railway logs for more detail.",
+      error: "Email failed: " + err.message,
+      code:  err.code,
+      fix:   err.code === "EAUTH"
+        ? "Wrong Gmail credentials. Check GMAIL_PASSWORD in Railway has no spaces and is a valid App Password."
+        : "Check Railway deploy logs for full error detail.",
     });
   }
 });
@@ -538,19 +583,19 @@ app.get("/admin/test-email", adminLimiter, async (req, res) => {
 // ════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
 //  Flush pending email batch before Railway
-//  restarts the server so nothing is lost.
+//  restarts so no submissions are lost.
 // ════════════════════════════════════════
 process.on("SIGTERM", () => {
-  console.log("SIGTERM — flushing email batch...");
-  flushEmailBatch();
+  console.log("SIGTERM received — flushing email batch...");
+  flushBatch();
   setTimeout(() => process.exit(0), 2000);
 });
  
 // ════════════════════════════════════════
 //  GLOBAL ERROR HANDLERS
 // ════════════════════════════════════════
-process.on("uncaughtException",  (err) => console.error("Uncaught exception:", err));
-process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
+process.on("uncaughtException",  err => console.error("Uncaught exception:", err));
+process.on("unhandledRejection", err => console.error("Unhandled rejection:", err));
  
 // ════════════════════════════════════════
 //  START
@@ -558,5 +603,6 @@ process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", 
 const PORT = process.env.PORT || 3000;
  
 initDB().then(() => {
+  transporter = createTransporter();
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
