@@ -1,6 +1,5 @@
 // ════════════════════════════════════════
-//  FORCE IPv4 — must be the very first lines.
-//  Railway cannot reach IPv6 reliably.
+//  FORCE IPv4 at DNS level
 // ════════════════════════════════════════
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
@@ -14,14 +13,12 @@ const nodemailer   = require("nodemailer");
 const { Low }      = require("lowdb");
 const { JSONFile } = require("lowdb/node");
 const path         = require("path");
+const net          = require("net"); // ← needed for IPv4 socket fix
  
 const app = express();
  
 // ════════════════════════════════════════
 //  TRUST PROXY
-//  Railway sits behind a load balancer.
-//  Without this, rate limiting misidentifies
-//  every user as the same IP.
 // ════════════════════════════════════════
 app.set("trust proxy", 1);
  
@@ -42,8 +39,6 @@ app.use(express.json());
  
 // ════════════════════════════════════════
 //  BODY GUARD
-//  Catches missing/malformed JSON bodies
-//  before they reach route handlers.
 // ════════════════════════════════════════
 function requireBody(req, res, next) {
   if (!req.body || typeof req.body !== "object") {
@@ -58,7 +53,7 @@ function requireBody(req, res, next) {
 const submitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 25,
-  message: { error: "Too many submissions from this network. Please try again later." },
+  message: { error: "Too many submissions. Please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -78,7 +73,7 @@ const adminLimiter = rateLimit({
 });
  
 // ════════════════════════════════════════
-//  DATABASE  (submissions.json — in .gitignore)
+//  DATABASE
 // ════════════════════════════════════════
 const dbFile  = path.join(__dirname, "submissions.json");
 const adapter = new JSONFile(dbFile);
@@ -95,76 +90,98 @@ async function initDB() {
  
 // ════════════════════════════════════════
 //  WRITE QUEUE
-//  Prevents concurrent write corruption.
 // ════════════════════════════════════════
 let writeQueue = Promise.resolve();
  
 function queueWrite(fn) {
   writeQueue = writeQueue
     .then(fn)
-    .catch(err => {
-      console.error("Write queue error:", err);
-      throw err;
-    });
+    .catch(err => { console.error("Write queue error:", err); throw err; });
   return writeQueue;
 }
  
 // ════════════════════════════════════════
 //  EMAIL — NODEMAILER + GMAIL
 //
-//  FIX: Resend was used before but emails
-//  were not arriving at ntalenderick@gmail.com
-//  because onboarding@resend.dev can only
-//  deliver to the Resend account owner's email.
+//  ROOT CAUSE OF PREVIOUS FAILURE:
+//  Even with dns.setDefaultResultOrder("ipv4first"),
+//  Railway's container was still resolving
+//  smtp.gmail.com to an IPv6 address
+//  (2607:f8b0:...) and then failing with
+//  ENETUNREACH because Railway blocks IPv6.
 //
-//  Nodemailer + Gmail app password works
-//  reliably and is already proven to work
-//  in this project.
+//  THE FIX:
+//  We resolve smtp.gmail.com to an IPv4
+//  address ourselves using dns.resolve4(),
+//  then pass that literal IP address to
+//  nodemailer so it never tries IPv6.
+//  We also set localAddress: "0.0.0.0"
+//  on the socket to force IPv4 binding.
 //
 //  Required Railway Variables:
 //    GMAIL_USER     = ntalenderick@gmail.com
-//    GMAIL_PASSWORD = your 16-char app password (no spaces)
-//
-//  How to get/verify app password:
-//    1. Go to myaccount.google.com/security
-//    2. Enable 2-Step Verification if not already on
-//    3. Search "App passwords"
-//    4. Create one named "Mundi Railway"
-//    5. Copy the 16 chars (remove spaces) into Railway Variables
+//    GMAIL_PASSWORD = fprkkifnctyqwjtg  (no spaces)
 // ════════════════════════════════════════
 let transporter = null;
  
-function createTransporter() {
+async function resolveIPv4(hostname) {
+  return new Promise((resolve, reject) => {
+    dns.resolve4(hostname, (err, addresses) => {
+      if (err || !addresses || addresses.length === 0) {
+        reject(err || new Error("No IPv4 addresses found for " + hostname));
+      } else {
+        resolve(addresses[0]);
+      }
+    });
+  });
+}
+ 
+async function createTransporter() {
   const user = process.env.GMAIL_USER;
   const pass = (process.env.GMAIL_PASSWORD || "").replace(/\s/g, "");
  
   if (!user || !pass) {
-    console.error("EMAIL CONFIG ERROR: GMAIL_USER or GMAIL_PASSWORD missing from Railway Variables.");
+    console.error("EMAIL CONFIG ERROR: GMAIL_USER or GMAIL_PASSWORD missing.");
     return null;
   }
  
+  let smtpHost = "smtp.gmail.com";
+ 
+  // Resolve to IPv4 explicitly — bypass Railway's IPv6 routing
+  try {
+    const ipv4 = await resolveIPv4("smtp.gmail.com");
+    smtpHost   = ipv4;
+    console.log(`Email: smtp.gmail.com resolved to IPv4 ${ipv4} ✓`);
+  } catch (err) {
+    console.warn("Could not resolve smtp.gmail.com to IPv4, using hostname:", err.message);
+  }
+ 
   return nodemailer.createTransport({
-    host:   "smtp.gmail.com",
+    host:   smtpHost,
     port:   465,
-    secure: true,          // SSL — avoids Railway blocking port 587
+    secure: true,
     auth:   { user, pass },
     tls: {
-      rejectUnauthorized: true,
+      // Must match gmail's cert even when connecting by IP
+      servername:           "smtp.gmail.com",
+      rejectUnauthorized:   true,
+    },
+    // ── KEY FIX: force the outbound socket to bind to IPv4 ──
+    socketOptions: {
+      family:       4,            // AF_INET = IPv4 only
+      localAddress: "0.0.0.0",   // bind to any IPv4 interface
     },
   });
 }
  
 // ════════════════════════════════════════
 //  SEND EMAIL (fire-and-forget)
-//  Prediction is always saved first.
-//  Email failure never blocks the response.
 // ════════════════════════════════════════
 async function sendEmail(to, subject, text) {
   if (!transporter) {
-    console.error("Email skipped — transporter not initialised (check Railway Variables).");
+    console.error("Email skipped — transporter not ready.");
     return;
   }
- 
   try {
     const info = await transporter.sendMail({
       from:    `"Mundi Predict & Win" <${process.env.GMAIL_USER}>`,
@@ -180,13 +197,12 @@ async function sendEmail(to, subject, text) {
  
 // ════════════════════════════════════════
 //  EMAIL BATCH QUEUE
-//  Groups submissions within a 60-second
-//  window into one email so your inbox
-//  doesn't get flooded during busy periods.
-//  On SIGTERM the batch flushes immediately.
+//  Groups submissions into one email per
+//  60-second window to avoid inbox flooding.
+//  Flushed immediately on SIGTERM.
 // ════════════════════════════════════════
-let pendingBatch   = [];
-let batchTimer     = null;
+let pendingBatch = [];
+let batchTimer   = null;
  
 function queueEmail(entry, matchId) {
   pendingBatch.push({ entry, matchId });
@@ -224,7 +240,7 @@ function flushBatch() {
       `  │  Goals in second half  : ${e.shGoals}`,
       `  └───────────────────────────────────`,
       ``,
-      `  ┌── FINAL RESULT ────────────────────`,
+      `  ┌── FINAL RESULT ───────────────────`,
       `  │  Match winner : ${e.winner}`,
       `  └───────────────────────────────────`,
       ``,
@@ -259,30 +275,30 @@ function getMatchEnd(kickoff) {
 }
  
 // ════════════════════════════════════════
-//  GET /matches  (public — used by script.js)
+//  GET /matches
 // ════════════════════════════════════════
 app.get("/matches", statusLimiter, async (req, res) => {
   await db.read();
   const matches = getAllMatches();
   const now     = new Date();
+  const pub     = {};
  
-  const publicMatches = {};
   for (const id in matches) {
     const kickoff  = new Date(matches[id].kickoff);
     const matchEnd = getMatchEnd(kickoff);
     if (now < matchEnd) {
-      publicMatches[id] = {
+      pub[id] = {
         kickoff: matches[id].kickoff,
         label:   matches[id].label,
       };
     }
   }
  
-  res.json(publicMatches);
+  res.json(pub);
 });
  
 // ════════════════════════════════════════
-//  GET /next-match  (public)
+//  GET /next-match
 // ════════════════════════════════════════
 app.get("/next-match", statusLimiter, async (req, res) => {
   await db.read();
@@ -309,7 +325,7 @@ app.get("/next-match", statusLimiter, async (req, res) => {
 });
  
 // ════════════════════════════════════════
-//  GET /status?matchId=...
+//  GET /status
 // ════════════════════════════════════════
 app.get("/status", statusLimiter, async (req, res) => {
   const { matchId } = req.query;
@@ -358,7 +374,6 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     });
   }
  
-  // Sanitize
   const clean = {
     name:     sanitize(data.name),
     email:    sanitize(data.email).toLowerCase(),
@@ -372,7 +387,6 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     winner:   sanitize(data.winner),
   };
  
-  // Validate required text fields
   const requiredText = [
     "name", "email", "phone", "teamA", "teamB",
     "fhLeader", "shLeader", "winner",
@@ -383,13 +397,11 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     }
   }
  
-  // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(clean.email)) {
     return res.status(400).json({ error: "Invalid email address." });
   }
  
-  // Validate goals
   if (
     isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
     clean.fhGoals < 0   || clean.shGoals < 0     ||
@@ -406,7 +418,7 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
       db.data.submissions[data.matchId] ||= [];
  
       const alreadySubmitted = db.data.submissions[data.matchId]
-        .some(entry => entry.email === clean.email);
+        .some(e => e.email === clean.email);
  
       if (alreadySubmitted) {
         result = {
@@ -434,7 +446,6 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
       .json(result ? result.body : { error: "Unexpected server error." });
   }
  
-  // Respond immediately — email is fire-and-forget
   res.json(result.body);
   queueEmail(result.record, data.matchId);
 });
@@ -530,10 +541,10 @@ app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
  
 // ════════════════════════════════════════
 //  GET /admin/test-email
-//  Sends a real test email so you can
-//  confirm Gmail credentials are working.
+//  Test your email config without submitting
+//  a real prediction.
 //
-//  Open this URL in your browser:
+//  Open in browser:
 //  https://my-portfolio-production-9dd4.up.railway.app
 //    /admin/test-email?secret=YOUR_ADMIN_SECRET
 // ════════════════════════════════════════
@@ -544,7 +555,7 @@ app.get("/admin/test-email", adminLimiter, async (req, res) => {
  
   if (!transporter) {
     return res.status(500).json({
-      error: "Email transporter not initialised. Check GMAIL_USER and GMAIL_PASSWORD in Railway Variables.",
+      error: "Email transporter not initialised. Check Railway Variables.",
     });
   }
  
@@ -555,38 +566,38 @@ app.get("/admin/test-email", adminLimiter, async (req, res) => {
       subject: "✅ Mundi Email Test — Working!",
       text:
         "This is a test email from your Mundi Predict & Win server.\n\n" +
-        "If you received this, your Gmail credentials are working correctly.\n\n" +
+        "If you received this, your email setup is working correctly.\n\n" +
         "Sent from : " + process.env.GMAIL_USER + "\n" +
         "Time      : " + new Date().toUTCString(),
     });
  
     console.log("Test email sent OK:", info.messageId);
     res.json({
-      status:    "Email sent successfully ✅",
+      status:    "✅ Email sent successfully",
       to:        "ntalenderick@gmail.com",
       messageId: info.messageId,
       note:      "Check your inbox and spam folder.",
     });
  
   } catch (err) {
-    console.error("Test email failed:", err.message, "| code:", err.code);
+    console.error("Test email FAILED:", err.message, "| code:", err.code);
     res.status(500).json({
       error: "Email failed: " + err.message,
       code:  err.code,
       fix:   err.code === "EAUTH"
-        ? "Wrong Gmail credentials. Check GMAIL_PASSWORD in Railway has no spaces and is a valid App Password."
-        : "Check Railway deploy logs for full error detail.",
+        ? "Wrong Gmail credentials. Regenerate your App Password at myaccount.google.com/apppasswords and update GMAIL_PASSWORD in Railway Variables (no spaces)."
+        : err.code === "ESOCKET" || err.code === "ENETUNREACH"
+        ? "IPv6 routing issue. The socketOptions fix should resolve this — check that you deployed the latest server.js."
+        : "Check Railway deploy logs for full error.",
     });
   }
 });
  
 // ════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
-//  Flush pending email batch before Railway
-//  restarts so no submissions are lost.
 // ════════════════════════════════════════
 process.on("SIGTERM", () => {
-  console.log("SIGTERM received — flushing email batch...");
+  console.log("SIGTERM — flushing email batch...");
   flushBatch();
   setTimeout(() => process.exit(0), 2000);
 });
@@ -602,7 +613,7 @@ process.on("unhandledRejection", err => console.error("Unhandled rejection:", er
 // ════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
  
-initDB().then(() => {
-  transporter = createTransporter();
+initDB().then(async () => {
+  transporter = await createTransporter(); // ← async now, resolves IPv4 first
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
