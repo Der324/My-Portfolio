@@ -1,5 +1,5 @@
 // ════════════════════════════════════════
-//  FORCE IPv4 at DNS level
+//  FORCE IPv4
 // ════════════════════════════════════════
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
@@ -9,11 +9,10 @@ require("dotenv").config();
 const express      = require("express");
 const cors         = require("cors");
 const rateLimit    = require("express-rate-limit");
-const nodemailer   = require("nodemailer");
+const { Resend }   = require("resend");
 const { Low }      = require("lowdb");
 const { JSONFile } = require("lowdb/node");
 const path         = require("path");
-const net          = require("net"); // ← needed for IPv4 socket fix
  
 const app = express();
  
@@ -101,104 +100,80 @@ function queueWrite(fn) {
 }
  
 // ════════════════════════════════════════
-//  EMAIL — NODEMAILER + GMAIL
+//  EMAIL — RESEND
 //
-//  ROOT CAUSE OF PREVIOUS FAILURE:
-//  Even with dns.setDefaultResultOrder("ipv4first"),
-//  Railway's container was still resolving
-//  smtp.gmail.com to an IPv6 address
-//  (2607:f8b0:...) and then failing with
-//  ENETUNREACH because Railway blocks IPv6.
+//  WHY RESEND INSTEAD OF NODEMAILER:
+//  Railway blocks all SMTP ports (25, 465, 587).
+//  Nodemailer connects via SMTP so it always
+//  fails on Railway with ETIMEDOUT or ESOCKET.
+//  Resend uses HTTPS (port 443) which Railway
+//  never blocks. Image 2 confirms Resend
+//  successfully delivered on Apr 19 at 4:07 PM.
 //
-//  THE FIX:
-//  We resolve smtp.gmail.com to an IPv4
-//  address ourselves using dns.resolve4(),
-//  then pass that literal IP address to
-//  nodemailer so it never tries IPv6.
-//  We also set localAddress: "0.0.0.0"
-//  on the socket to force IPv4 binding.
+//  IMPORTANT — The previous Resend failure was
+//  because onboarding@resend.dev can only
+//  deliver to the email that OWNS the Resend
+//  account. The fix is to verify
+//  ntalenderick@gmail.com as a contact in
+//  Resend dashboard → Contacts, OR use a
+//  verified sending domain.
+//
+//  QUICKEST FIX (no domain needed):
+//  1. Go to resend.com and log in
+//  2. Go to Contacts → Add Contact
+//  3. Add ntalenderick@gmail.com
+//  4. This allows onboarding@resend.dev to
+//     deliver to that address
 //
 //  Required Railway Variables:
-//    GMAIL_USER     = ntalenderick@gmail.com
-//    GMAIL_PASSWORD = fprkkifnctyqwjtg  (no spaces)
+//    RESEND_API_KEY = re_PXVJqRSv_... (your key)
+//
+//  DO NOT put RESEND_API_KEY in any code file.
+//  Keep it only in Railway Variables.
 // ════════════════════════════════════════
-let transporter = null;
+let resend = null;
  
-async function resolveIPv4(hostname) {
-  return new Promise((resolve, reject) => {
-    dns.resolve4(hostname, (err, addresses) => {
-      if (err || !addresses || addresses.length === 0) {
-        reject(err || new Error("No IPv4 addresses found for " + hostname));
-      } else {
-        resolve(addresses[0]);
-      }
-    });
-  });
-}
- 
-async function createTransporter() {
-  const user = process.env.GMAIL_USER;
-  const pass = (process.env.GMAIL_PASSWORD || "").replace(/\s/g, "");
- 
-  if (!user || !pass) {
-    console.error("EMAIL CONFIG ERROR: GMAIL_USER or GMAIL_PASSWORD missing.");
+function initResend() {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    console.error("EMAIL CONFIG ERROR: RESEND_API_KEY missing from Railway Variables.");
     return null;
   }
- 
-  let smtpHost = "smtp.gmail.com";
- 
-  // Resolve to IPv4 explicitly — bypass Railway's IPv6 routing
-  try {
-    const ipv4 = await resolveIPv4("smtp.gmail.com");
-    smtpHost   = ipv4;
-    console.log(`Email: smtp.gmail.com resolved to IPv4 ${ipv4} ✓`);
-  } catch (err) {
-    console.warn("Could not resolve smtp.gmail.com to IPv4, using hostname:", err.message);
-  }
- 
-  return nodemailer.createTransport({
-    host:   smtpHost,
-    port:   465,
-    secure: true,
-    auth:   { user, pass },
-    tls: {
-      // Must match gmail's cert even when connecting by IP
-      servername:           "smtp.gmail.com",
-      rejectUnauthorized:   true,
-    },
-    // ── KEY FIX: force the outbound socket to bind to IPv4 ──
-    socketOptions: {
-      family:       4,            // AF_INET = IPv4 only
-      localAddress: "0.0.0.0",   // bind to any IPv4 interface
-    },
-  });
+  console.log("Email config OK — Resend API key found.");
+  return new Resend(key);
 }
  
 // ════════════════════════════════════════
 //  SEND EMAIL (fire-and-forget)
+//  Prediction is always saved first.
+//  Email failure never blocks the response.
 // ════════════════════════════════════════
 async function sendEmail(to, subject, text) {
-  if (!transporter) {
-    console.error("Email skipped — transporter not ready.");
+  if (!resend) {
+    console.error("Email skipped — Resend not initialised.");
     return;
   }
   try {
-    const info = await transporter.sendMail({
-      from:    `"Mundi Predict & Win" <${process.env.GMAIL_USER}>`,
-      to,
+    const { data, error } = await resend.emails.send({
+      from:    "Mundi Predict & Win <onboarding@resend.dev>",
+      to:      [to],
       subject,
       text,
     });
-    console.log("Email sent OK:", info.messageId);
+    if (error) {
+      console.error("Email FAILED:", error.message || JSON.stringify(error));
+    } else {
+      console.log("Email sent OK:", data.id);
+    }
   } catch (err) {
-    console.error("Email FAILED:", err.message, "| code:", err.code);
+    console.error("Email FAILED (exception):", err.message);
   }
 }
  
 // ════════════════════════════════════════
 //  EMAIL BATCH QUEUE
-//  Groups submissions into one email per
-//  60-second window to avoid inbox flooding.
+//  Groups submissions within 60 seconds
+//  into one email to avoid inbox flooding.
 //  Flushed immediately on SIGTERM.
 // ════════════════════════════════════════
 let pendingBatch = [];
@@ -218,46 +193,71 @@ function flushBatch() {
   const batch = pendingBatch.splice(0);
   const count = batch.length;
  
+  // ── Build clearly structured email body ──
   const lines = batch.map((item, i) => {
     const e = item.entry;
     return [
-      `─────────────────────────────────────`,
-      `  ${i + 1}. ${e.name}`,
-      `─────────────────────────────────────`,
-      `  Match ID  : ${item.matchId}`,
-      `  Email     : ${e.email}`,
-      `  Phone     : ${e.phone}`,
+      `══════════════════════════════════════════`,
+      `  PREDICTION ${i + 1} of ${count}`,
+      `══════════════════════════════════════════`,
       ``,
-      `  Match     : ${e.teamA}  vs  ${e.teamB}`,
+      `  PARTICIPANT`,
+      `  ───────────`,
+      `  Name    : ${e.name}`,
+      `  Email   : ${e.email}`,
+      `  Phone   : ${e.phone}`,
       ``,
-      `  ┌── FIRST HALF PREDICTION ──────────`,
-      `  │  Leading at half time : ${e.fhLeader}`,
-      `  │  Goals in first half  : ${e.fhGoals}`,
-      `  └───────────────────────────────────`,
+      `  MATCH  [${item.matchId}]`,
+      `  ──────────────────────`,
+      `  ${e.teamA}  vs  ${e.teamB}`,
       ``,
-      `  ┌── SECOND HALF PREDICTION ─────────`,
-      `  │  Leading at full time  : ${e.shLeader}`,
-      `  │  Goals in second half  : ${e.shGoals}`,
-      `  └───────────────────────────────────`,
+      `  ┌─────────────────────────────────────┐`,
+      `  │         FIRST HALF PREDICTION       │`,
+      `  ├─────────────────────────────────────┤`,
+      `  │  Who leads at half time?            │`,
+      `  │  → ${e.fhLeader.padEnd(33)}│`,
+      `  │                                     │`,
+      `  │  Total goals in first half?         │`,
+      `  │  → ${String(e.fhGoals).padEnd(33)}│`,
+      `  └─────────────────────────────────────┘`,
       ``,
-      `  ┌── FINAL RESULT ───────────────────`,
-      `  │  Match winner : ${e.winner}`,
-      `  └───────────────────────────────────`,
+      `  ┌─────────────────────────────────────┐`,
+      `  │        SECOND HALF PREDICTION       │`,
+      `  ├─────────────────────────────────────┤`,
+      `  │  Who leads at full time?            │`,
+      `  │  → ${e.shLeader.padEnd(33)}│`,
+      `  │                                     │`,
+      `  │  Total goals in second half?        │`,
+      `  │  → ${String(e.shGoals).padEnd(33)}│`,
+      `  └─────────────────────────────────────┘`,
+      ``,
+      `  ┌─────────────────────────────────────┐`,
+      `  │           FINAL RESULT              │`,
+      `  ├─────────────────────────────────────┤`,
+      `  │  Match winner?                      │`,
+      `  │  → ${e.winner.padEnd(33)}│`,
+      `  └─────────────────────────────────────┘`,
       ``,
       `  Submitted : ${new Date(e.submittedAt).toLocaleString("en-RW", {
-        timeZone: "Africa/Kigali"
-      })} (Kigali time)`,
+        timeZone:  "Africa/Kigali",
+        dateStyle: "full",
+        timeStyle: "medium",
+      })} (Kigali)`,
     ].join("\n");
   }).join("\n\n");
  
-  sendEmail(
-    "ntalenderick@gmail.com",
-    `⚽ ${count} New Prediction${count > 1 ? "s" : ""} — Mundi Predict & Win`,
-    `${count} new prediction${count > 1 ? "s" : ""} received:\n\n` +
+  const subject = count === 1
+    ? `⚽ 1 New Prediction — Mundi Predict & Win`
+    : `⚽ ${count} New Predictions — Mundi Predict & Win`;
+ 
+  const body =
+    `${count} new prediction${count > 1 ? "s" : ""} received\n` +
+    `─────────────────────────────────────────\n\n` +
     `${lines}\n\n` +
-    `─────────────────────────────────────\n` +
-    `View all submissions in your admin panel.\n`
-  );
+    `─────────────────────────────────────────\n` +
+    `View all submissions in your admin panel.\n`;
+ 
+  sendEmail("ntalenderick@gmail.com", subject, body);
 }
  
 // ════════════════════════════════════════
@@ -308,7 +308,9 @@ app.get("/next-match", statusLimiter, async (req, res) => {
  
   for (const id in matches) {
     const kickoff = new Date(matches[id].kickoff);
-    if (kickoff > now) upcoming.push({ id, kickoff, label: matches[id].label });
+    if (kickoff > now) {
+      upcoming.push({ id, kickoff, label: matches[id].label });
+    }
   }
  
   if (upcoming.length === 0) return res.json({ found: false });
@@ -374,6 +376,7 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     });
   }
  
+  // Sanitize
   const clean = {
     name:     sanitize(data.name),
     email:    sanitize(data.email).toLowerCase(),
@@ -387,6 +390,7 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     winner:   sanitize(data.winner),
   };
  
+  // Validate required fields
   const requiredText = [
     "name", "email", "phone", "teamA", "teamB",
     "fhLeader", "shLeader", "winner",
@@ -397,11 +401,13 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
     }
   }
  
+  // Validate email
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(clean.email)) {
     return res.status(400).json({ error: "Invalid email address." });
   }
  
+  // Validate goals
   if (
     isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
     clean.fhGoals < 0   || clean.shGoals < 0     ||
@@ -446,6 +452,7 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
       .json(result ? result.body : { error: "Unexpected server error." });
   }
  
+  // Respond immediately — email is queued separately
   res.json(result.body);
   queueEmail(result.record, data.matchId);
 });
@@ -541,8 +548,7 @@ app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
  
 // ════════════════════════════════════════
 //  GET /admin/test-email
-//  Test your email config without submitting
-//  a real prediction.
+//  Sends a real test to ntalenderick@gmail.com
 //
 //  Open in browser:
 //  https://my-portfolio-production-9dd4.up.railway.app
@@ -553,43 +559,42 @@ app.get("/admin/test-email", adminLimiter, async (req, res) => {
     return res.status(403).json({ error: "Unauthorized." });
   }
  
-  if (!transporter) {
+  if (!resend) {
     return res.status(500).json({
-      error: "Email transporter not initialised. Check Railway Variables.",
+      error: "Resend not initialised. Check RESEND_API_KEY in Railway Variables.",
     });
   }
  
   try {
-    const info = await transporter.sendMail({
-      from:    `"Mundi Predict & Win" <${process.env.GMAIL_USER}>`,
-      to:      "ntalenderick@gmail.com",
+    const { data, error } = await resend.emails.send({
+      from:    "Mundi Predict & Win <onboarding@resend.dev>",
+      to:      ["ntalenderick@gmail.com"],
       subject: "✅ Mundi Email Test — Working!",
       text:
         "This is a test email from your Mundi Predict & Win server.\n\n" +
-        "If you received this, your email setup is working correctly.\n\n" +
-        "Sent from : " + process.env.GMAIL_USER + "\n" +
-        "Time      : " + new Date().toUTCString(),
+        "If you received this, Resend is delivering correctly.\n\n" +
+        "Time : " + new Date().toUTCString(),
     });
  
-    console.log("Test email sent OK:", info.messageId);
+    if (error) {
+      console.error("Test email FAILED:", error);
+      return res.status(500).json({
+        error: "Resend rejected the email: " + (error.message || JSON.stringify(error)),
+        fix:   "Go to resend.com → Contacts → add ntalenderick@gmail.com so onboarding@resend.dev can deliver to it.",
+      });
+    }
+ 
+    console.log("Test email sent OK:", data.id);
     res.json({
       status:    "✅ Email sent successfully",
       to:        "ntalenderick@gmail.com",
-      messageId: info.messageId,
-      note:      "Check your inbox and spam folder.",
+      messageId: data.id,
+      note:      "Check your inbox and spam folder. If not received, go to resend.com → Contacts and add ntalenderick@gmail.com.",
     });
  
   } catch (err) {
-    console.error("Test email FAILED:", err.message, "| code:", err.code);
-    res.status(500).json({
-      error: "Email failed: " + err.message,
-      code:  err.code,
-      fix:   err.code === "EAUTH"
-        ? "Wrong Gmail credentials. Regenerate your App Password at myaccount.google.com/apppasswords and update GMAIL_PASSWORD in Railway Variables (no spaces)."
-        : err.code === "ESOCKET" || err.code === "ENETUNREACH"
-        ? "IPv6 routing issue. The socketOptions fix should resolve this — check that you deployed the latest server.js."
-        : "Check Railway deploy logs for full error.",
-    });
+    console.error("Test email exception:", err.message);
+    res.status(500).json({ error: "Exception: " + err.message });
   }
 });
  
@@ -613,7 +618,7 @@ process.on("unhandledRejection", err => console.error("Unhandled rejection:", er
 // ════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
  
-initDB().then(async () => {
-  transporter = await createTransporter(); // ← async now, resolves IPv4 first
+initDB().then(() => {
+  resend = initResend();
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
