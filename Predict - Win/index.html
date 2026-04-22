@@ -4,10 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
  
-    <!-- FIX: theme-color so mobile browser address bar matches the dark background -->
-    <meta name="theme-color" content="#081a0d">
- 
-    <!-- FIX: description for link sharing -->
+    <!-- FIX ln 8: removed meta[name=theme-color] — not supported by Firefox -->
     <meta name="description" content="Mundi Center — Predict the match result and win!">
  
     <title>Mundi Predict &amp; Win</title>
@@ -19,7 +16,6 @@
   </head>
   <body>
  
-    <!-- Background decoration -->
     <div class="bg-deco" aria-hidden="true">
       <div class="bg-ball bg-ball--1">⚽</div>
       <div class="bg-ball bg-ball--2">⚽</div>
@@ -31,12 +27,22 @@
       <header class="header">
         <div class="header__badge">MUNDI CENTER</div>
         <h1 class="header__title">PREDICT <span class="accent">&amp;</span> WIN</h1>
+ 
+        <!-- Team names + league set by admin, displayed here -->
+        <div id="matchInfo" class="header__match-info hidden">
+          <div id="matchLeague" class="header__league"></div>
+          <div class="header__teams">
+            <span id="headerTeamA"></span>
+            <span class="vs">VS</span>
+            <span id="headerTeamB"></span>
+          </div>
+        </div>
+ 
         <p class="header__subtitle">One prediction per match · May the best fan win</p>
         <div id="countdown" class="countdown" role="timer" aria-live="polite"></div>
       </header>
  
       <!-- ── STATUS: No active match ── -->
-      <!-- FIX: updated message — app auto-detects match, no "specific link" needed -->
       <div id="noMatchMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">⚠️</div>
         <h2 class="status-screen__title">No Active Match</h2>
@@ -51,14 +57,14 @@
         <div class="status-screen__tag">Good luck 🍀</div>
       </div>
  
-      <!-- ── STATUS: Predictions closed (match started) ── -->
+      <!-- ── STATUS: Predictions closed ── -->
       <div id="closedMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">⛔</div>
         <h2 class="status-screen__title">Predictions Closed</h2>
         <p class="status-screen__body">The match has started. No more entries are being accepted.</p>
       </div>
  
-      <!-- ── STATUS: Match ended / no current match ── -->
+      <!-- ── STATUS: Match ended ── -->
       <div id="matchEndedMsg" class="status-screen hidden" role="alert">
         <div class="status-screen__icon">🏁</div>
         <h2 class="status-screen__title">No Active Match</h2>
@@ -100,28 +106,28 @@
           </div>
         </section>
  
-        <!-- Section 2: The Match -->
+        <!-- Section 2: The Match (read-only — set by admin) -->
         <section class="form-section">
           <h2 class="section-title">
             <span class="section-title__icon">🏟️</span>The Match
           </h2>
-          <p class="section-hint">Type in the exact team names you want to predict on.</p>
  
-          <div class="teams-row">
-            <div class="field">
-              <label class="field__label" for="teamA">Home Team</label>
-              <input class="field__input" type="text" id="teamA"
-                placeholder="e.g. Liverpool" maxlength="60" required>
-              <span class="field__error" id="teamA-error"></span>
+          <!-- Teams displayed from admin data — user cannot edit -->
+          <div class="match-display">
+            <div class="match-display__team">
+              <span class="match-display__team-label">Home</span>
+              <div id="displayTeamA" class="match-display__team-name">—</div>
             </div>
-            <div class="vs-badge">VS</div>
-            <div class="field">
-              <label class="field__label" for="teamB">Away Team</label>
-              <input class="field__input" type="text" id="teamB"
-                placeholder="e.g. PSG" maxlength="60" required>
-              <span class="field__error" id="teamB-error"></span>
+            <div class="match-display__vs">VS</div>
+            <div class="match-display__team">
+              <span class="match-display__team-label">Away</span>
+              <div id="displayTeamB" class="match-display__team-name">—</div>
             </div>
           </div>
+ 
+          <!-- Hidden inputs carry team values to the submit handler -->
+          <input type="hidden" id="teamA">
+          <input type="hidden" id="teamB">
         </section>
  
         <!-- Section 3: First Half -->
@@ -271,6 +277,6 @@
       </form>
     </div>
  
-    <script src="./script.js?v=2"></script>
+    <script src="./script.js?v=3"></script>
   </body>
 </html>

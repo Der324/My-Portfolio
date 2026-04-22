@@ -8,7 +8,7 @@ let storageKey     = null;
 let countdownTimer = null;
  
 // ════════════════════════════════════════
-//  SHOW / HIDE SCREENS
+//  SCREEN MANAGER
 // ════════════════════════════════════════
 function showOnly(id) {
   const screens = [
@@ -25,17 +25,60 @@ function showOnly(id) {
 }
  
 // ════════════════════════════════════════
+//  POPULATE TEAM NAMES FROM SERVER
+//  Admin sets teamA, teamB, and league
+//  in admin.html. They come back via /matches.
+//  User sees them as read-only — no typing.
+// ════════════════════════════════════════
+function populateMatchDisplay(match) {
+  const teamA  = match.teamA  || "";
+  const teamB  = match.teamB  || "";
+  const league = match.league || "";
+ 
+  // Fill hidden inputs used by submit handler
+  document.getElementById("teamA").value = teamA;
+  document.getElementById("teamB").value = teamB;
+ 
+  // Fill read-only display boxes
+  document.getElementById("displayTeamA").innerText = teamA || "TBA";
+  document.getElementById("displayTeamB").innerText = teamB || "TBA";
+ 
+  // Fill header
+  if (teamA && teamB) {
+    document.getElementById("headerTeamA").innerText = teamA;
+    document.getElementById("headerTeamB").innerText = teamB;
+    document.getElementById("matchInfo").classList.remove("hidden");
+  }
+ 
+  // Fill league badge if present
+  const leagueEl = document.getElementById("matchLeague");
+  if (leagueEl) {
+    leagueEl.innerText = league;
+    leagueEl.style.display = league ? "block" : "none";
+  }
+ 
+  // Update radio labels to show actual team names
+  if (teamA) {
+    document.getElementById("fhHomeLabel").innerText     = teamA;
+    document.getElementById("shHomeLabel").innerText     = teamA;
+    document.getElementById("winnerHomeLabel").innerText = teamA;
+  }
+  if (teamB) {
+    document.getElementById("fhAwayLabel").innerText     = teamB;
+    document.getElementById("shAwayLabel").innerText     = teamB;
+    document.getElementById("winnerAwayLabel").innerText = teamB;
+  }
+}
+ 
+// ════════════════════════════════════════
 //  FETCH ACTIVE MATCH
-//  Returns { match } on success,
-//  { networkError: true } on connection failure,
-//  null when no active match exists.
 // ════════════════════════════════════════
 async function getActiveMatch() {
   try {
     const res     = await fetch(`${API}/matches`);
     const matches = await res.json();
  
-    const now = new Date();
+    const now           = new Date();
     const activeMatches = [];
  
     for (const id in matches) {
@@ -76,28 +119,20 @@ async function getNextMatch() {
  
 // ════════════════════════════════════════
 //  INIT
-//  FIX: retries once after 2.5s on network
-//  error to handle Railway cold starts.
-//  FIX: distinguishes network errors from
-//  "no match" so users see the right message.
 // ════════════════════════════════════════
 async function init() {
-  const matchLabelEl = document.getElementById("matchLabel");
-  if (matchLabelEl) matchLabelEl.innerText = "";
- 
   let matchResult = await getActiveMatch();
  
-  // Railway cold start can take ~2s — retry once on network failure
+  // Retry once for Railway cold starts
   if (matchResult && matchResult.networkError) {
     await new Promise(r => setTimeout(r, 2500));
     matchResult = await getActiveMatch();
   }
  
-  // Still failing after retry — show "no match" rather than misleading message
   if (matchResult && matchResult.networkError) {
     showOnly("matchEndedMsg");
-    const countdown = document.getElementById("countdown");
-    if (countdown) countdown.innerText = "⚠️ Could not connect — please refresh";
+    const el = document.getElementById("countdown");
+    if (el) el.innerText = "⚠️ Could not connect — please refresh";
     return;
   }
  
@@ -106,6 +141,9 @@ async function init() {
     startPostMatchCountdown();
     return;
   }
+ 
+  // Populate team names and league from server data
+  populateMatchDisplay(matchResult);
  
   const kickoff = new Date(matchResult.kickoff);
  
@@ -143,7 +181,7 @@ async function init() {
 init();
  
 // ════════════════════════════════════════
-//  COUNTDOWN — PHASE 1 (pre-match & in-match)
+//  COUNTDOWN — pre-match & in-match
 // ════════════════════════════════════════
 function startPreMatchCountdown(kickoff) {
   if (countdownTimer) clearTimeout(countdownTimer);
@@ -168,9 +206,7 @@ function startPreMatchCountdown(kickoff) {
       el.innerText = `⏳ Match in progress — ends in ${m}m ${pad(s)}s`;
  
       const closed = document.getElementById("closedMsg");
-      if (closed && closed.classList.contains("hidden")) {
-        showOnly("closedMsg");
-      }
+      if (closed && closed.classList.contains("hidden")) showOnly("closedMsg");
  
     } else {
       el.innerText = "";
@@ -186,7 +222,7 @@ function startPreMatchCountdown(kickoff) {
 }
  
 // ════════════════════════════════════════
-//  COUNTDOWN — PHASE 2 (post-match)
+//  COUNTDOWN — post-match
 // ════════════════════════════════════════
 async function startPostMatchCountdown() {
   if (countdownTimer) clearTimeout(countdownTimer);
@@ -194,10 +230,7 @@ async function startPostMatchCountdown() {
   const el   = document.getElementById("countdown");
   const next = await getNextMatch();
  
-  if (!next) {
-    el.innerText = "";
-    return;
-  }
+  if (!next) { el.innerText = ""; return; }
  
   const nextKickoff = new Date(next.kickoff);
  
@@ -238,31 +271,12 @@ document.querySelectorAll(".num-btn").forEach(btn => {
   btn.addEventListener("click", () => {
     const input = document.getElementById(btn.dataset.target);
     if (!input) return;
- 
     let val = parseInt(input.value) || 0;
     if (btn.dataset.action === "inc" && val < 20) val++;
     if (btn.dataset.action === "dec" && val > 0)  val--;
- 
     input.value = val;
     input.dispatchEvent(new Event("input"));
   });
-});
- 
-// ════════════════════════════════════════
-//  LIVE TEAM LABELS
-// ════════════════════════════════════════
-document.getElementById("teamA").addEventListener("input", function () {
-  const name = this.value.trim() || "Home Team";
-  document.getElementById("fhHomeLabel").innerText     = name;
-  document.getElementById("shHomeLabel").innerText     = name;
-  document.getElementById("winnerHomeLabel").innerText = name;
-});
- 
-document.getElementById("teamB").addEventListener("input", function () {
-  const name = this.value.trim() || "Away Team";
-  document.getElementById("fhAwayLabel").innerText     = name;
-  document.getElementById("shAwayLabel").innerText     = name;
-  document.getElementById("winnerAwayLabel").innerText = name;
 });
  
 // ════════════════════════════════════════
@@ -292,7 +306,7 @@ function clearError(fieldId) {
 }
  
 function clearAllErrors() {
-  ["name", "email", "phone", "teamA", "teamB", "fhGoals", "shGoals"].forEach(clearError);
+  ["name", "email", "phone", "fhGoals", "shGoals"].forEach(clearError);
   ["fhLeader-error", "shLeader-error", "winner-error"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerText = "";
@@ -303,18 +317,31 @@ function validateForm(d) {
   let valid = true;
   clearAllErrors();
  
-  if (!d.name.trim())  { showError("name",  "Enter your name");  valid = false; }
+  if (!d.name.trim())  { showError("name",  "Please enter your full name.");  valid = false; }
  
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(d.email)) { showError("email", "Invalid email"); valid = false; }
+  if (!d.email.trim()) {
+    showError("email", "Please enter your email address.");
+    valid = false;
+  } else if (!emailRegex.test(d.email)) {
+    showError("email", "Please enter a valid email address.");
+    valid = false;
+  }
  
-  if (!d.phone.trim()) { showError("phone", "Enter phone");       valid = false; }
-  if (!d.teamA.trim()) { showError("teamA", "Enter home team");   valid = false; }
-  if (!d.teamB.trim()) { showError("teamB", "Enter away team");   valid = false; }
+  if (!d.phone.trim()) { showError("phone", "Please enter your phone number."); valid = false; }
  
-  if (!d.fhLeaderRaw) { document.getElementById("fhLeader-error").innerText = "Required"; valid = false; }
-  if (!d.shLeaderRaw) { document.getElementById("shLeader-error").innerText = "Required"; valid = false; }
-  if (!d.winnerRaw)   { document.getElementById("winner-error").innerText   = "Required"; valid = false; }
+  if (!d.fhLeaderRaw) {
+    document.getElementById("fhLeader-error").innerText = "Please select who leads at half time.";
+    valid = false;
+  }
+  if (!d.shLeaderRaw) {
+    document.getElementById("shLeader-error").innerText = "Please select who leads at full time.";
+    valid = false;
+  }
+  if (!d.winnerRaw) {
+    document.getElementById("winner-error").innerText = "Please select the match winner.";
+    valid = false;
+  }
  
   return valid;
 }
@@ -326,11 +353,12 @@ document.getElementById("predictionForm")
   .addEventListener("submit", async (e) => {
     e.preventDefault();
  
-    const btn = document.getElementById("submitBtn");
-    const msg = document.getElementById("msg");
+    const btn  = document.getElementById("submitBtn");
+    const msg  = document.getElementById("msg");
  
-    const teamA = document.getElementById("teamA").value.trim();
-    const teamB = document.getElementById("teamB").value.trim();
+    // Team names come from hidden inputs (set by populateMatchDisplay)
+    const teamA = document.getElementById("teamA").value;
+    const teamB = document.getElementById("teamB").value;
  
     const fhLeaderRaw = document.querySelector('input[name="fhLeader"]:checked')?.value;
     const shLeaderRaw = document.querySelector('input[name="shLeader"]:checked')?.value;
@@ -340,9 +368,9 @@ document.getElementById("predictionForm")
       name:       document.getElementById("name").value,
       email:      document.getElementById("email").value,
       phone:      document.getElementById("phone").value,
-      teamA, teamB, fhLeaderRaw, shLeaderRaw, winnerRaw,
-      fhGoals:    document.getElementById("fhGoals").value,
-      shGoals:    document.getElementById("shGoals").value,
+      fhLeaderRaw,
+      shLeaderRaw,
+      winnerRaw,
     };
  
     if (!validateForm(raw)) return;
@@ -352,11 +380,12 @@ document.getElementById("predictionForm")
       name:     raw.name.trim(),
       email:    raw.email.trim(),
       phone:    raw.phone.trim(),
-      teamA, teamB,
+      teamA,
+      teamB,
       fhLeader: resolveTeam(fhLeaderRaw, teamA, teamB),
-      fhGoals:  raw.fhGoals,
+      fhGoals:  document.getElementById("fhGoals").value,
       shLeader: resolveTeam(shLeaderRaw, teamA, teamB),
-      shGoals:  raw.shGoals,
+      shGoals:  document.getElementById("shGoals").value,
       winner:   resolveTeam(winnerRaw, teamA, teamB),
     };
  
