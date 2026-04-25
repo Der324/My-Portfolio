@@ -1,3 +1,6 @@
+// ════════════════════════════════════════
+//  FORCE IPv4 — Railway blocks IPv6 outbound
+// ════════════════════════════════════════
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
  
@@ -12,30 +15,43 @@ const { JSONFile } = require("lowdb/node");
 const path         = require("path");
  
 const app = express();
+ 
+// ════════════════════════════════════════
+//  TRUST PROXY — Railway load balancer
+// ════════════════════════════════════════
 app.set("trust proxy", 1);
  
 // ════════════════════════════════════════
-//  SECURITY FIX 4: Body size limit
-//  Prevents oversized payload attacks.
-//  Must be set BEFORE express.json()
+//  BODY SIZE LIMIT — must come before
+//  express.json() to prevent large payloads
 // ════════════════════════════════════════
 app.use(express.json({ limit: "10kb" }));
  
 // ════════════════════════════════════════
-//  CORS
-//  Note: CORS only restricts browsers.
-//  curl/Postman can still reach the API.
-//  Server-side validation is the real guard.
+//  CORS — covers both GitHub Pages repos
+//  and local dev. CORS only stops browsers;
+//  server-side validation is the real guard.
 // ════════════════════════════════════════
 app.use(cors({
-  origin: [
-    "http://127.0.0.1:5500",
-    "http://localhost:5500",
-    "https://der324.github.io",
-    "https://my-portfolio-production-9dd4.up.railway.app",
-  ],
-  methods: ["GET", "POST"],
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // non-browser clients
+    if (origin.startsWith("https://der324.github.io")) return cb(null, true);
+    if (origin === "http://127.0.0.1:5500") return cb(null, true);
+    if (origin === "http://localhost:5500")  return cb(null, true);
+    cb(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "DELETE"],
 }));
+ 
+// ════════════════════════════════════════
+//  SECURITY HEADERS
+// ════════════════════════════════════════
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
  
 // ════════════════════════════════════════
 //  BODY GUARD
@@ -48,34 +64,32 @@ function requireBody(req, res, next) {
 }
  
 // ════════════════════════════════════════
-//  SECURITY FIX 6: Tighter rate limiting
-//  Reduced from 25 to 5 submit attempts
-//  per 15 minutes per IP.
+//  RATE LIMITING
+//  submit: 5 per 15 min per IP
+//  status: 120 per min (countdown polls)
+//  admin:  30 per 15 min
 // ════════════════════════════════════════
 const submitLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: { error: "Too many submission attempts. Please try again later." },
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 15 * 60 * 1000, max: 5,
+  message: { error: "Too many attempts. Please try again later." },
+  standardHeaders: true, legacyHeaders: false,
 });
  
 const statusLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 60 * 1000, max: 120,
+  standardHeaders: true, legacyHeaders: false,
 });
  
 const adminLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 15 * 60 * 1000, max: 30,
+  standardHeaders: true, legacyHeaders: false,
 });
  
 // ════════════════════════════════════════
-//  DATABASE
+//  DATABASE  (submissions.json)
+//  NOTE: Railway filesystem is ephemeral —
+//  data resets on redeploy. Emails are the
+//  reliable backup of all predictions.
 // ════════════════════════════════════════
 const dbFile  = path.join(__dirname, "submissions.json");
 const adapter = new JSONFile(dbFile);
@@ -91,27 +105,31 @@ async function initDB() {
 }
  
 // ════════════════════════════════════════
-//  WRITE QUEUE — prevents concurrent
-//  write corruption on the JSON file
+//  WRITE QUEUE — serialises all DB writes
+//  to prevent concurrent file corruption
 // ════════════════════════════════════════
 let writeQueue = Promise.resolve();
  
 function queueWrite(fn) {
-  writeQueue = writeQueue.then(fn).catch(err => {
-    console.error("Write queue error:", err);
-    throw err;
-  });
+  writeQueue = writeQueue
+    .then(fn)
+    .catch(err => { console.error("Write queue error:", err); throw err; });
   return writeQueue;
 }
  
 // ════════════════════════════════════════
 //  RESEND EMAIL
+//  Uses HTTPS port 443 — Railway never
+//  blocks this. SMTP (25/465/587) is blocked.
+//
+//  Required Railway Variable:
+//    RESEND_API_KEY = re_xxxxxxxxxxxx
 // ════════════════════════════════════════
 let resend = null;
  
 function initResend() {
   const key = process.env.RESEND_API_KEY;
-  if (!key) { console.error("RESEND_API_KEY missing."); return null; }
+  if (!key) { console.error("RESEND_API_KEY missing from Railway Variables."); return null; }
   console.log("Email config OK — Resend ready.");
   return new Resend(key);
 }
@@ -133,8 +151,9 @@ async function sendEmail(to, subject, text) {
 }
  
 // ════════════════════════════════════════
-//  EMAIL BATCH — groups submissions within
-//  60s window to avoid inbox flooding
+//  EMAIL BATCH QUEUE
+//  Groups submissions within 60s into one
+//  email. Flushed on SIGTERM so nothing lost.
 // ════════════════════════════════════════
 let pendingBatch = [];
 let batchTimer   = null;
@@ -156,19 +175,19 @@ function flushBatch() {
     const league = item.matchData?.league ? ` · ${item.matchData.league}` : "";
     return [
       `${i + 1}. ${e.name}`,
-      `   Email    : ${e.email}`,
-      `   Phone    : ${e.phone}`,
-      `   Match    : ${e.teamA} vs ${e.teamB}${league}`,
+      `   Email     : ${e.email}`,
+      `   Phone     : ${e.phone}`,
+      `   Match     : ${e.teamA} vs ${e.teamB}${league}`,
       ``,
       `   Half time : ${e.fhLeader} leads · ${e.fhGoals} goal${e.fhGoals !== 1 ? "s" : ""}`,
       `   Full time : ${e.shLeader} leads · ${e.shGoals} goal${e.shGoals !== 1 ? "s" : ""}`,
       `   Winner    : ${e.winner}`,
       ``,
       `   Submitted : ${new Date(e.submittedAt).toLocaleString("en-RW", {
-        timeZone: "Africa/Kigali", dateStyle: "medium", timeStyle: "short"
-      })}`,
+        timeZone: "Africa/Kigali", dateStyle: "medium", timeStyle: "short",
+      })} (Kigali)`,
     ].join("\n");
-  }).join("\n\n" + "─".repeat(44) + "\n\n");
+  }).join("\n\n" + "─".repeat(46) + "\n\n");
  
   const subject = count === 1
     ? `⚽ New Prediction — ${batch[0].entry.teamA} vs ${batch[0].entry.teamB}`
@@ -178,9 +197,9 @@ function flushBatch() {
     "ntalenderick@gmail.com",
     subject,
     `${count} new prediction${count > 1 ? "s" : ""} received\n` +
-    `${"═".repeat(44)}\n\n` + entries + `\n\n` +
-    `${"═".repeat(44)}\n` +
-    `View all entries in your admin panel.\n`
+    `${"═".repeat(46)}\n\n` + entries + `\n\n` +
+    `${"═".repeat(46)}\n` +
+    `View all submissions in your admin panel.\n`
   );
 }
  
@@ -190,209 +209,198 @@ function flushBatch() {
 function getAllMatches() { return { ...db.data.matches }; }
  
 const sanitize = (str) =>
-  String(str || "").replace(/[<>"']/g, "").trim().slice(0, 100);
+  String(str || "").replace(/[<>"'`\\]/g, "").trim().slice(0, 100);
  
-// ════════════════════════════════════════
-//  MATCH DURATION: 90 MINUTES
-//  A standard football match is 90 minutes.
-//  Was incorrectly set to 120 minutes before.
-// ════════════════════════════════════════
+// Standard football match = 90 minutes
 const MATCH_DURATION_MS = 90 * 60 * 1000;
  
 function getMatchEnd(kickoff) {
   return new Date(new Date(kickoff).getTime() + MATCH_DURATION_MS);
 }
  
-// ════════════════════════════════════════
-//  ADMIN SECRET VALIDATOR
-//  Used by all admin endpoints
-// ════════════════════════════════════════
 function verifyAdmin(secret) {
   const adminSecret = process.env.ADMIN_SECRET;
-  if (!adminSecret) {
-    console.error("ADMIN_SECRET not set in environment variables.");
-    return false;
-  }
-  return secret === adminSecret;
+  if (!adminSecret) { console.error("ADMIN_SECRET not set."); return false; }
+  return typeof secret === "string" && secret === adminSecret;
 }
  
 // ════════════════════════════════════════
 //  GET /matches  (public)
-//  Returns active + upcoming matches with
-//  team names and league set by admin.
+//  Returns non-ended matches with admin-set
+//  team names and league for the frontend.
 // ════════════════════════════════════════
 app.get("/matches", statusLimiter, async (req, res) => {
-  await db.read();
-  const matches = getAllMatches();
-  const now     = new Date();
-  const pub     = {};
+  try {
+    await db.read();
+    const matches = getAllMatches();
+    const now     = new Date();
+    const pub     = {};
  
-  for (const id in matches) {
-    const kickoff  = new Date(matches[id].kickoff);
-    const matchEnd = getMatchEnd(kickoff);
-    // Show matches that haven't ended yet
-    if (now < matchEnd) {
-      pub[id] = {
-        kickoff: matches[id].kickoff,
-        label:   matches[id].label,
-        teamA:   matches[id].teamA  || "",
-        teamB:   matches[id].teamB  || "",
-        league:  matches[id].league || "",
-      };
+    for (const id in matches) {
+      const kickoff  = new Date(matches[id].kickoff);
+      const matchEnd = getMatchEnd(kickoff);
+      if (now < matchEnd) {
+        pub[id] = {
+          kickoff: matches[id].kickoff,
+          label:   matches[id].label  || "",
+          teamA:   matches[id].teamA  || "",
+          teamB:   matches[id].teamB  || "",
+          league:  matches[id].league || "",
+        };
+      }
     }
-  }
  
-  res.json(pub);
+    res.json(pub);
+  } catch (err) {
+    console.error("GET /matches:", err.message);
+    res.status(500).json({ error: "Server error." });
+  }
 });
  
 // ── GET /next-match ──
 app.get("/next-match", statusLimiter, async (req, res) => {
-  await db.read();
-  const matches  = getAllMatches();
-  const now      = new Date();
-  const upcoming = [];
+  try {
+    await db.read();
+    const matches  = getAllMatches();
+    const now      = new Date();
+    const upcoming = [];
  
-  for (const id in matches) {
-    const kickoff = new Date(matches[id].kickoff);
-    if (kickoff > now) upcoming.push({ id, kickoff, label: matches[id].label });
+    for (const id in matches) {
+      const kickoff = new Date(matches[id].kickoff);
+      if (kickoff > now) upcoming.push({ id, kickoff, label: matches[id].label || "" });
+    }
+ 
+    if (upcoming.length === 0) return res.json({ found: false });
+ 
+    upcoming.sort((a, b) => a.kickoff - b.kickoff);
+    const next = upcoming[0];
+    res.json({ found: true, kickoff: next.kickoff.toISOString(), matchId: next.id, label: next.label });
+  } catch (err) {
+    console.error("GET /next-match:", err.message);
+    res.status(500).json({ error: "Server error." });
   }
- 
-  if (upcoming.length === 0) return res.json({ found: false });
-  upcoming.sort((a, b) => a.kickoff - b.kickoff);
-  const next = upcoming[0];
- 
-  res.json({
-    found:   true,
-    kickoff: next.kickoff.toISOString(),
-    matchId: next.id,
-    label:   next.label,
-  });
 });
  
 // ── GET /status ──
 app.get("/status", statusLimiter, async (req, res) => {
-  const { matchId } = req.query;
-  await db.read();
-  const matches = getAllMatches();
+  try {
+    const { matchId } = req.query;
+    if (!matchId || typeof matchId !== "string" || matchId.length > 80) {
+      return res.status(400).json({ error: "Invalid matchId." });
+    }
  
-  if (!matchId || !matches[matchId]) {
-    return res.status(404).json({ error: "Match not found." });
+    await db.read();
+    const matches = getAllMatches();
+ 
+    if (!matches[matchId]) {
+      return res.status(404).json({ error: "Match not found." });
+    }
+ 
+    const match    = matches[matchId];
+    const now      = new Date();
+    const kickoff  = new Date(match.kickoff);
+    const matchEnd = getMatchEnd(kickoff);
+ 
+    res.json({
+      open:     now < kickoff,
+      ended:    now >= matchEnd,
+      kickoff:  match.kickoff,
+      matchEnd: matchEnd.toISOString(),
+      total:    (db.data.submissions[matchId] || []).length,
+    });
+  } catch (err) {
+    console.error("GET /status:", err.message);
+    res.status(500).json({ error: "Server error." });
   }
- 
-  const match    = matches[matchId];
-  const now      = new Date();
-  const kickoff  = new Date(match.kickoff);
-  const matchEnd = getMatchEnd(kickoff);
-  const open     = now < kickoff;   // predictions open ONLY before kickoff
-  const ended    = now >= matchEnd; // match ended after 90 minutes
-  const count    = (db.data.submissions[matchId] || []).length;
- 
-  res.json({
-    open,
-    ended,
-    kickoff:  match.kickoff,
-    matchEnd: matchEnd.toISOString(),
-    total:    count,
-  });
 });
  
 // ════════════════════════════════════════
 //  POST /submit
 //
-//  SECURITY: One submission per email per match.
-//  SECURITY: Closed after kickoff — server
-//  checks its own clock, not the client's.
-//  SECURITY: teamA and teamB come from the
-//  server's own database, not user input.
-//  SECURITY FIX 7: Goals validated 0-20.
+//  Strict one-prediction-per-match enforcement:
+//  ✅ Server checks its own clock for kickoff
+//  ✅ Server reads teamA/teamB from its own DB
+//  ✅ Duplicate email check inside write queue
+//  ✅ Prediction values validated against real
+//     team names — no arbitrary strings
+//  ✅ Goals 0–20 strictly enforced
+//  ✅ Rate limited to 5 attempts per 15 min
 // ════════════════════════════════════════
 app.post("/submit", submitLimiter, requireBody, async (req, res) => {
-  const now  = new Date();
-  const data = req.body;
- 
-  await db.read();
-  const matches = getAllMatches();
-  const match   = matches[data.matchId];
- 
-  // Validate match exists
-  if (!match) {
-    return res.status(404).json({ error: "Invalid match." });
-  }
- 
-  // SECURITY: Block submissions after kickoff — server enforces this
-  if (now >= new Date(match.kickoff)) {
-    return res.status(403).json({
-      error: "Predictions are closed. The match has already started.",
-    });
-  }
- 
-  // Sanitize user inputs
-  const clean = {
-    name:     sanitize(data.name),
-    email:    sanitize(data.email).toLowerCase(),
-    phone:    sanitize(data.phone),
-    // SECURITY FIX 5: Team names come from SERVER database only
-    // User cannot inject their own team names
-    teamA:    sanitize(match.teamA || ""),
-    teamB:    sanitize(match.teamB || ""),
-    fhLeader: sanitize(data.fhLeader),
-    fhGoals:  parseInt(data.fhGoals, 10),
-    shLeader: sanitize(data.shLeader),
-    shGoals:  parseInt(data.shGoals, 10),
-    winner:   sanitize(data.winner),
-  };
- 
-  // Validate required text fields
-  const requiredText = ["name", "email", "phone", "fhLeader", "shLeader", "winner"];
-  for (const field of requiredText) {
-    if (!clean[field]) {
-      return res.status(400).json({ error: `Missing field: ${field}` });
-    }
-  }
- 
-  // Validate email format
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(clean.email)) {
-    return res.status(400).json({ error: "Invalid email address." });
-  }
- 
-  // SECURITY FIX 7: Strict goal validation
-  if (
-    isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
-    clean.fhGoals < 0   || clean.shGoals < 0     ||
-    clean.fhGoals > 20  || clean.shGoals > 20
-  ) {
-    return res.status(400).json({ error: "Invalid goal values (must be 0–20)." });
-  }
- 
-  // Validate prediction values are allowed options
-  const validLeaders = [clean.teamA, clean.teamB, "Draw"].filter(Boolean);
-  if (!validLeaders.includes(clean.fhLeader)) {
-    return res.status(400).json({ error: "Invalid first half leader." });
-  }
-  if (!validLeaders.includes(clean.shLeader)) {
-    return res.status(400).json({ error: "Invalid second half leader." });
-  }
-  if (![clean.teamA, clean.teamB, "Draw"].filter(Boolean).includes(clean.winner)) {
-    return res.status(400).json({ error: "Invalid winner selection." });
-  }
- 
-  let result = null;
- 
   try {
+    const now  = new Date();
+    const data = req.body;
+ 
+    if (!data.matchId || typeof data.matchId !== "string" || data.matchId.length > 80) {
+      return res.status(400).json({ error: "Invalid matchId." });
+    }
+ 
+    await db.read();
+    const matches = getAllMatches();
+    const match   = matches[data.matchId];
+ 
+    if (!match) return res.status(404).json({ error: "Match not found." });
+ 
+    // ── STRICT: block after kickoff using SERVER clock ──
+    if (now >= new Date(match.kickoff)) {
+      return res.status(403).json({
+        error: "Predictions are closed. This match has already started.",
+      });
+    }
+ 
+    // Build clean record — team names ALWAYS from server DB, never user input
+    const clean = {
+      name:     sanitize(data.name),
+      email:    sanitize(data.email || "").toLowerCase(),
+      phone:    sanitize(data.phone),
+      teamA:    sanitize(match.teamA || ""),
+      teamB:    sanitize(match.teamB || ""),
+      fhLeader: sanitize(data.fhLeader),
+      fhGoals:  parseInt(data.fhGoals, 10),
+      shLeader: sanitize(data.shLeader),
+      shGoals:  parseInt(data.shGoals, 10),
+      winner:   sanitize(data.winner),
+    };
+ 
+    // Required fields
+    for (const field of ["name", "email", "phone", "fhLeader", "shLeader", "winner"]) {
+      if (!clean[field]) return res.status(400).json({ error: `Missing field: ${field}` });
+    }
+ 
+    // Email format
+    if (!/^[^\s@]{1,64}@[^\s@]{1,253}\.[^\s@]{2,}$/.test(clean.email)) {
+      return res.status(400).json({ error: "Invalid email address." });
+    }
+ 
+    // Phone: digits, spaces, +, dashes only
+    if (!/^[\d\s+\-]{7,20}$/.test(clean.phone)) {
+      return res.status(400).json({ error: "Invalid phone number." });
+    }
+ 
+    // Goals 0–20
+    if (
+      isNaN(clean.fhGoals) || isNaN(clean.shGoals) ||
+      clean.fhGoals < 0 || clean.shGoals < 0 ||
+      clean.fhGoals > 20 || clean.shGoals > 20
+    ) {
+      return res.status(400).json({ error: "Goal values must be 0–20." });
+    }
+ 
+    // Prediction values must match actual team names or Draw
+    const valid = [clean.teamA, clean.teamB, "Draw"].filter(Boolean);
+    if (!valid.includes(clean.fhLeader)) return res.status(400).json({ error: "Invalid first half selection." });
+    if (!valid.includes(clean.shLeader)) return res.status(400).json({ error: "Invalid second half selection." });
+    if (!valid.includes(clean.winner))   return res.status(400).json({ error: "Invalid winner selection." });
+ 
+    let result = null;
+ 
     await queueWrite(async () => {
       await db.read();
       db.data.submissions[data.matchId] ||= [];
  
-      // SECURITY: One submission per email address per match
-      const alreadySubmitted = db.data.submissions[data.matchId]
-        .some(e => e.email === clean.email);
- 
-      if (alreadySubmitted) {
-        result = {
-          code: 409,
-          body: { error: "You have already submitted a prediction for this match." },
-        };
+      // ── STRICT: one submission per email per match ──
+      if (db.data.submissions[data.matchId].some(e => e.email === clean.email)) {
+        result = { code: 409, body: { error: "You have already submitted a prediction for this match." } };
         return;
       }
  
@@ -401,162 +409,193 @@ app.post("/submit", submitLimiter, requireBody, async (req, res) => {
       await db.write();
       result = { code: 200, body: { status: "success" }, record };
     });
+ 
+    if (!result || result.code !== 200) {
+      return res.status(result?.code ?? 500).json(result?.body ?? { error: "Unexpected error." });
+    }
+ 
+    res.json(result.body);
+    queueEmail(result.record, data.matchId, match);
+ 
   } catch (err) {
-    console.error("Submit write failed:", err);
-    return res.status(500).json({ error: "Server error. Please try again." });
+    console.error("POST /submit:", err.message);
+    res.status(500).json({ error: "Server error. Please try again." });
   }
- 
-  if (!result || result.code !== 200) {
-    return res.status(result ? result.code : 500)
-              .json(result ? result.body : { error: "Unexpected error." });
-  }
- 
-  res.json(result.body);
-  queueEmail(result.record, data.matchId, match);
 });
  
 // ════════════════════════════════════════
-//  POST /admin/match
-//  Now stores teamA, teamB, league.
+//  POST /admin/match — schedule a match
 // ════════════════════════════════════════
 app.post("/admin/match", adminLimiter, requireBody, async (req, res) => {
-  const { secret, matchId, label, kickoff, teamA, teamB, league } = req.body;
- 
-  if (!verifyAdmin(secret)) {
-    return res.status(403).json({ error: "Unauthorized." });
-  }
- 
-  if (!matchId || !label || !kickoff) {
-    return res.status(400).json({ error: "matchId, label, and kickoff are required." });
-  }
- 
-  if (!teamA || !teamB) {
-    return res.status(400).json({ error: "teamA and teamB are required." });
-  }
- 
-  if (String(matchId).length > 80) {
-    return res.status(400).json({ error: "matchId must be 80 characters or fewer." });
-  }
- 
-  if (isNaN(new Date(kickoff).getTime())) {
-    return res.status(400).json({ error: "Invalid kickoff date format." });
-  }
- 
   try {
+    const { secret, matchId, label, kickoff, teamA, teamB, league } = req.body;
+ 
+    if (!verifyAdmin(secret)) return res.status(403).json({ error: "Unauthorized." });
+ 
+    if (!matchId || !label || !kickoff || !teamA || !teamB) {
+      return res.status(400).json({ error: "matchId, label, kickoff, teamA, and teamB are all required." });
+    }
+ 
+    if (String(matchId).length > 80) return res.status(400).json({ error: "matchId too long." });
+ 
+    const kickoffDate = new Date(kickoff);
+    if (isNaN(kickoffDate.getTime())) return res.status(400).json({ error: "Invalid kickoff date." });
+    if (kickoffDate <= new Date())    return res.status(400).json({ error: "Kickoff must be in the future." });
+ 
     await queueWrite(async () => {
       await db.read();
       db.data.matches[sanitize(matchId)] = {
         label:   sanitize(label),
-        kickoff: new Date(kickoff).toISOString(),
+        kickoff: kickoffDate.toISOString(),
         teamA:   sanitize(teamA),
         teamB:   sanitize(teamB),
         league:  sanitize(league || ""),
       };
       await db.write();
     });
+ 
+    console.log(`Match added: ${sanitize(teamA)} vs ${sanitize(teamB)} [${matchId}]`);
+    res.json({ status: "Match added", matchId, label, teamA, teamB, league, kickoff });
+ 
   } catch (err) {
-    return res.status(500).json({ error: "Server error saving match." });
+    console.error("POST /admin/match:", err.message);
+    res.status(500).json({ error: "Server error saving match." });
   }
- 
-  res.json({ status: "Match added", matchId, label, teamA, teamB, league, kickoff });
 });
  
 // ════════════════════════════════════════
-//  SECURITY FIX 3: Admin endpoints now use
-//  POST with secret in body instead of GET
-//  with secret in URL (which appears in logs).
-//
-//  GET /admin/matches — kept for admin panel
-//  login check but uses query param minimally
+//  DELETE /admin/match — delete a match
+//  AND all its submissions completely.
+//  This causes the predict page to show
+//  "No Active Match" immediately with no
+//  countdown — exactly like a fresh state.
 // ════════════════════════════════════════
-app.get("/admin/matches", adminLimiter, async (req, res) => {
-  if (!verifyAdmin(req.query.secret)) {
-    return res.status(403).json({ error: "Unauthorized." });
-  }
-  await db.read();
-  res.json(getAllMatches());
-});
- 
-// ════════════════════════════════════════
-//  POST /admin/submissions
-//  SECURITY FIX 3: Moved to POST so secret
-//  goes in request body, not URL/logs.
-// ════════════════════════════════════════
-app.post("/admin/submissions", adminLimiter, requireBody, async (req, res) => {
-  if (!verifyAdmin(req.body.secret)) {
-    return res.status(403).json({ error: "Unauthorized." });
-  }
-  await db.read();
-  res.json(db.data.submissions);
-});
- 
-// Keep GET for backward compat with existing admin.html
-app.get("/admin/submissions", adminLimiter, async (req, res) => {
-  if (!verifyAdmin(req.query.secret)) {
-    return res.status(403).json({ error: "Unauthorized." });
-  }
-  await db.read();
-  res.json(db.data.submissions);
-});
- 
-// ── POST /admin/reset ──
-app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
-  const { secret, matchId } = req.body;
- 
-  if (!verifyAdmin(secret)) {
-    return res.status(403).json({ error: "Unauthorized." });
-  }
- 
-  if (!matchId) {
-    return res.status(400).json({ error: "matchId is required." });
-  }
- 
+app.delete("/admin/match", adminLimiter, requireBody, async (req, res) => {
   try {
+    const { secret, matchId } = req.body;
+ 
+    if (!verifyAdmin(secret)) return res.status(403).json({ error: "Unauthorized." });
+ 
+    if (!matchId || typeof matchId !== "string") {
+      return res.status(400).json({ error: "matchId is required." });
+    }
+ 
+    await queueWrite(async () => {
+      await db.read();
+ 
+      if (!db.data.matches[matchId]) {
+        return; // already gone — not an error
+      }
+ 
+      // Remove match AND its submissions entirely
+      delete db.data.matches[matchId];
+      delete db.data.submissions[matchId];
+      await db.write();
+    });
+ 
+    console.log(`Match deleted: ${matchId}`);
+    res.json({ status: "Match deleted", matchId });
+ 
+  } catch (err) {
+    console.error("DELETE /admin/match:", err.message);
+    res.status(500).json({ error: "Server error deleting match." });
+  }
+});
+ 
+// ── GET /admin/matches ──
+app.get("/admin/matches", adminLimiter, async (req, res) => {
+  try {
+    if (!verifyAdmin(req.query.secret)) return res.status(403).json({ error: "Unauthorized." });
+    await db.read();
+    res.json(getAllMatches());
+  } catch (err) {
+    console.error("GET /admin/matches:", err.message);
+    res.status(500).json({ error: "Server error." });
+  }
+});
+ 
+// ── GET /admin/submissions ──
+app.get("/admin/submissions", adminLimiter, async (req, res) => {
+  try {
+    if (!verifyAdmin(req.query.secret)) return res.status(403).json({ error: "Unauthorized." });
+    await db.read();
+    res.json(db.data.submissions);
+  } catch (err) {
+    console.error("GET /admin/submissions:", err.message);
+    res.status(500).json({ error: "Server error." });
+  }
+});
+ 
+// ── POST /admin/reset — clears submissions only (match stays) ──
+app.post("/admin/reset", adminLimiter, requireBody, async (req, res) => {
+  try {
+    const { secret, matchId } = req.body;
+ 
+    if (!verifyAdmin(secret)) return res.status(403).json({ error: "Unauthorized." });
+    if (!matchId) return res.status(400).json({ error: "matchId is required." });
+ 
     await queueWrite(async () => {
       await db.read();
       db.data.submissions[matchId] = [];
       await db.write();
     });
-  } catch (err) {
-    return res.status(500).json({ error: "Server error during reset." });
-  }
  
-  res.json({ status: "Reset complete", matchId });
+    console.log(`Submissions reset for: ${matchId}`);
+    res.json({ status: "Reset complete", matchId });
+ 
+  } catch (err) {
+    console.error("POST /admin/reset:", err.message);
+    res.status(500).json({ error: "Server error during reset." });
+  }
 });
  
 // ── GET /admin/test-email ──
 app.get("/admin/test-email", adminLimiter, async (req, res) => {
-  if (!verifyAdmin(req.query.secret)) {
-    return res.status(403).json({ error: "Unauthorized." });
-  }
-  if (!resend) return res.status(500).json({ error: "Resend not initialised." });
- 
   try {
+    if (!verifyAdmin(req.query.secret)) return res.status(403).json({ error: "Unauthorized." });
+    if (!resend) return res.status(500).json({ error: "Resend not initialised. Check RESEND_API_KEY." });
+ 
     const { data, error } = await resend.emails.send({
       from:    "Mundi Predict & Win <onboarding@resend.dev>",
       to:      ["ntalenderick@gmail.com"],
       subject: "✅ Mundi Email Test — Working!",
       text:    "Test email from Mundi Predict & Win.\nTime: " + new Date().toUTCString(),
     });
+ 
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ status: "✅ Email sent", messageId: data.id });
+    res.json({ status: "✅ Email sent", to: "ntalenderick@gmail.com", id: data.id });
+ 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
  
-// ── GRACEFUL SHUTDOWN ──
+// ── 404 ──
+app.use((_req, res) => res.status(404).json({ error: "Not found." }));
+ 
+// ── Global error handler ──
+app.use((err, _req, res, _next) => {
+  console.error("Unhandled error:", err.message);
+  res.status(500).json({ error: "Internal server error." });
+});
+ 
+// ════════════════════════════════════════
+//  GRACEFUL SHUTDOWN
+// ════════════════════════════════════════
 process.on("SIGTERM", () => {
   console.log("SIGTERM — flushing email batch...");
   flushBatch();
-  setTimeout(() => process.exit(0), 2000);
+  setTimeout(() => process.exit(0), 2500);
 });
  
-process.on("uncaughtException",  err => console.error("Uncaught:", err));
-process.on("unhandledRejection", err => console.error("Unhandled:", err));
+process.on("uncaughtException",  err => console.error("Uncaught exception:", err));
+process.on("unhandledRejection", err => console.error("Unhandled rejection:", err));
  
-// ── START ──
+// ════════════════════════════════════════
+//  START
+// ════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
+ 
 initDB().then(() => {
   resend = initResend();
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

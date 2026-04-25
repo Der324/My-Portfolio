@@ -1,22 +1,24 @@
 {
-  "name": "predict---win",
+  "name": "predict-win",
   "version": "1.0.0",
-  "description": "",
-  "main": "script.js",
+  "description": "Mundi Predict & Win — football prediction backend",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "body-parser": "^2.2.2",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.2",
     "lowdb": "^7.0.1",
     "resend": "^6.12.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
   }
 }
